@@ -1,36 +1,33 @@
 import pygame as pg
-from core.config import screen, clock
-from models.player import Player
-from models.walls import Wall
+
+from core.config import clock, screen
+from core.scene_manager import SceneManager
+from scenes.world_scene import WorldScene
+from world.world_map import WorldMap
 
 
-pg.init()
-scr_w, scr_h = screen.get_size()
+def main():
+    pg.init()
+    manager = SceneManager()
+    world = WorldMap(seed=1337)
+    manager.world = world
 
-player = Player(scr_w // 2, scr_h // 2, 50, 100, 100, 200, 'blue')
-walls = [
-    Wall(100, 100, 50, 50, 100, "gray"),
-    Wall(400, 300, 200, 30, 100, "gray"),
-    Wall(800, 500, 30, 200, 100, "gray"),
-]
+    manager.switch(WorldScene(manager, world))
 
-running = True
-while running:
-    dt = clock.tick(60) / 1000   # ОДИН раз за кадр!
+    running = True
+    while running:
+        dt = clock.tick(60) / 1000
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                running = False
+            else:
+                manager.handle_event(event)
+        manager.update(dt)
+        manager.draw(screen)
+        pg.display.flip()
 
-    for event in pg.event.get():
-        if event.type == pg.QUIT:
-            running = False
+    pg.quit()
 
-    screen.fill("purple")
 
-    # Игрок двигается с учётом стен
-    player.update(dt, walls)
-    player.draw(screen)
-
-    for wall in walls:
-        wall.draw(screen)
-
-    pg.display.flip()
-
-pg.quit()
+if __name__ == "__main__":
+    main()
