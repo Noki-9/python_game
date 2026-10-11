@@ -1,31 +1,36 @@
 import pygame as pg
 from core.config import screen, clock
 from models.player import Player
+from models.walls import Wall
 
 
-# pygame setup
 pg.init()
-scr_size = screen.get_size()
+scr_w, scr_h = screen.get_size()
 
-player = Player(scr_size[0] // 2, scr_size[1] // 2, 50, 100, 100, 200, 'blue')
+player = Player(scr_w // 2, scr_h // 2, 50, 100, 100, 200, 'blue')
+walls = [
+    Wall(100, 100, 50, 50, 100, "gray"),
+    Wall(400, 300, 200, 30, 100, "gray"),
+    Wall(800, 500, 30, 200, 100, "gray"),
+]
 
 running = True
 while running:
-    dt = clock.tick(60) / 1000
-    # poll for events
+    dt = clock.tick(60) / 1000   # ОДИН раз за кадр!
+
     for event in pg.event.get():
         if event.type == pg.QUIT:
             running = False
 
-    # fill the screen with a color to wipe away anything from last frame
     screen.fill("purple")
 
-    player.update(dt)
+    # Игрок двигается с учётом стен
+    player.update(dt, walls)
     player.draw(screen)
 
-    # flip() the display to put your work on screen
-    pg.display.flip()
+    for wall in walls:
+        wall.draw(screen)
 
-    clock.tick(60)  # limits FPS to 60
+    pg.display.flip()
 
 pg.quit()
