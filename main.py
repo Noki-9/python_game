@@ -1,4 +1,5 @@
 import pygame as pg
+from random import randint
 
 from core.config import clock, screen
 from core.scene_manager import SceneManager
@@ -9,7 +10,7 @@ from world.world_map import WorldMap
 def main():
     pg.init()
     manager = SceneManager()
-    world = WorldMap(seed=1337)
+    world = WorldMap(seed=randint(1000, 9999))
     manager.world = world
 
     manager.switch(WorldScene(manager, world))
