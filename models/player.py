@@ -1,4 +1,5 @@
 import math
+import random
 
 import pygame as pg
 
@@ -17,21 +18,19 @@ class Player(Unit):
         self.state = state
         self.attack_timer = 0.0
 
-    # --- Урон и смерть ---
     def take_damage(self, amount):
         if self.state is None:
             self.health -= amount
             return self.health <= 0
         return self.state.take_damage(amount)
 
-    def is_alive(self) -> bool:
+    def is_alive(self):
         if self.state is None:
             return self.health > 0
         return self.state.hp > 0
 
-    # --- Атака ---
     def try_attack(self, targets):
-        """Возвращает (killed, target) или None."""
+        """Возвращает (killed, target, is_crit) или None."""
         if self.state is None or self.attack_timer > 0:
             return None
 
@@ -54,11 +53,15 @@ class Player(Unit):
         if target is None:
             return None
 
-        self.attack_timer = self.state.attack_cooldown
-        killed = target.take_damage(self.state.attack_damage)
-        return killed, target
+        damage = self.state.attack_damage
+        is_crit = random.random() < self.state.crit_chance
+        if is_crit:
+            damage = int(damage * self.state.crit_multiplier)
 
-    # --- Движение (без изменений, только attack_timer) ---
+        self.attack_timer = self.state.attack_cooldown
+        killed = target.take_damage(damage)
+        return killed, target, is_crit
+
     def update(self, dt, walls=None, map_w_px=None, map_h_px=None):
         super().update(dt)
         if self.attack_timer > 0:

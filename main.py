@@ -14,7 +14,7 @@ def main():
     manager = SceneManager()
     world = WorldMap(seed=randint(1000, 9999))
     manager.world = world
-    manager.player_state = PlayerState(stamina=30, max_stamina=30)
+    manager.player_state = PlayerState(class_id="warrior")
 
     manager.switch(WorldScene(manager, world, mode="spawn"))
 

@@ -3,6 +3,9 @@ import pygame as pg
 from core.camera import Camera
 from core.config import VISION_RADIUS, screen
 from core.scene_manager import Scene
+from ui.character_ui import CharacterUI
+from ui.inventory_ui import InventoryUI
+from ui.skills_ui import SkillsUI
 from world.biome import Biome
 
 SEG_SIZE = 16
@@ -59,7 +62,6 @@ class WorldScene(Scene):
 
         self._ensure_prerender()
 
-    # ---- Позиция через state ----
     @property
     def gx(self):
         return self.state.gx
@@ -76,7 +78,7 @@ class WorldScene(Scene):
     def gy(self, v):
         self.state.gy = v
 
-    # ---------------- Пре-рендер ----------------
+    # ---------- Пре-рендер ----------
     def _ensure_prerender(self):
         if getattr(self.world, "_prerender", None) is None:
             self._prerender_map()
@@ -84,7 +86,6 @@ class WorldScene(Scene):
     def _prerender_map(self):
         surf = pg.Surface((self.map_w_px, self.map_h_px))
         surf.fill((15, 15, 25))
-
         for (gx, gy), seg in self.world.segments.items():
             pg.draw.rect(
                 surf,
@@ -102,10 +103,8 @@ class WorldScene(Scene):
                 nbr = self.world.segments.get((gx + dx, gy + dy))
                 if nbr is None or nbr.biome == seg.biome:
                     continue
-
                 seg_walk = seg.biome.walkable
                 nbr_walk = nbr.biome.walkable
-
                 if seg_walk and not nbr_walk:
                     self._draw_edge_dither(
                         surf,
@@ -131,14 +130,12 @@ class WorldScene(Scene):
         sx, sy = gx * SEG_SIZE, gy * SEG_SIZE
         blend = _mix(base, nbr_color, 0.5)
         n_strips = SEG_SIZE // 2
-
         for i in range(n_strips):
             n = _edge_noise(gx, gy, direction, i)
             if n < 0.30:
                 continue
             thickness = int(1 + (n - 0.30) / 0.70 * max_thickness)
             color = blend if n < 0.60 else nbr_color
-
             if direction == "N":
                 pg.draw.rect(surface, color, (sx + i * 2, sy, 2, thickness))
             elif direction == "S":
@@ -156,7 +153,7 @@ class WorldScene(Scene):
                     (sx + SEG_SIZE - thickness, sy + i * 2, thickness, 2),
                 )
 
-    # ---------------- Туман войны ----------------
+    # ---------- Туман ----------
     def _update_explored(self):
         r = VISION_RADIUS
         r2 = r * r
@@ -168,19 +165,11 @@ class WorldScene(Scene):
                 if seg is not None:
                     seg.explored = True
 
-    # ---------------- Жизненный цикл ----------------
     def on_enter(self, world_pos=None, mode=None):
         if mode is not None:
             self.mode = mode
         if world_pos is not None:
             self.gx, self.gy = world_pos
-            self._update_explored()
-        elif self.mode == "spawn":
-            self.gx = self.world.start_gx
-            self.gy = self.world.start_gy
-        else:
-            self.gx = self.world.start_gx
-            self.gy = self.world.start_gy
             self._update_explored()
         self._center_camera()
 
@@ -194,8 +183,19 @@ class WorldScene(Scene):
             0, min(cy - self.camera.view_h / 2, self.map_h_px - self.camera.view_h)
         )
 
-    # ---------------- Ввод ----------------
+    # ---------- Ввод ----------
     def handle_event(self, event):
+        if event.type == pg.KEYDOWN:
+            if event.key == pg.K_i:
+                self.manager.push_ui(InventoryUI(screen.get_size(), self.state))
+                return
+            if event.key == pg.K_c:
+                self.manager.push_ui(CharacterUI(screen.get_size(), self.state))
+                return
+            if event.key == pg.K_k:
+                self.manager.push_ui(SkillsUI(screen.get_size(), self.state))
+                return
+
         if self.mode == "spawn":
             self._handle_spawn_input(event)
         else:
@@ -210,7 +210,6 @@ class WorldScene(Scene):
     def _handle_play_input(self, event):
         if event.type != pg.KEYDOWN:
             return
-
         dx = dy = 0
         if event.key == pg.K_w:
             dy = -1
@@ -220,10 +219,8 @@ class WorldScene(Scene):
             dx = -1
         if event.key == pg.K_d:
             dx = 1
-
         if dx or dy:
             self._try_step(dx, dy)
-
         if event.key == pg.K_RETURN:
             seg = self.world.get(self.gx, self.gy)
             if seg and seg.biome.walkable:
@@ -273,7 +270,7 @@ class WorldScene(Scene):
             return 999
         return BIOME_MOVE_COST.get(seg.biome, DEFAULT_MOVE_COST)
 
-    # ---------------- Update ----------------
+    # ---------- Update ----------
     def update(self, dt):
         if self.mode != "spawn":
             return
@@ -287,7 +284,6 @@ class WorldScene(Scene):
             pan_x -= 1
         if keys[pg.K_d]:
             pan_x += 1
-
         if pan_x or pan_y:
             self.camera.x = max(
                 0,
@@ -308,11 +304,10 @@ class WorldScene(Scene):
         self.hover_seg = (gx, gy) if gx is not None else None
         self.hover_valid = gx is not None
 
-    # ---------------- Draw ----------------
+    # ---------- Draw ----------
     def draw(self, screen):
         screen.fill((15, 15, 25))
         cam_x, cam_y = int(self.camera.x), int(self.camera.y)
-
         screen.blit(
             self.world._prerender,
             (0, 0),
@@ -327,7 +322,7 @@ class WorldScene(Scene):
         else:
             self._draw_player(screen, cam_x, cam_y)
 
-        self._draw_stamina(screen)
+        self._draw_hud(screen)
         self._draw_hint(screen)
 
     def _draw_fog(self, screen, cam_x, cam_y):
@@ -364,7 +359,6 @@ class WorldScene(Scene):
                 or sy > self.camera.view_h
             ):
                 continue
-
             color = (100, 100, 100) if poi.cleared else poi.icon_color
             center = (sx + SEG_SIZE // 2, sy + SEG_SIZE // 2)
             pg.draw.circle(screen, color, center, 6)
@@ -378,7 +372,6 @@ class WorldScene(Scene):
         sy = hy * SEG_SIZE - cam_y
         color = (255, 255, 255) if self.hover_valid else (200, 60, 60)
         pg.draw.rect(screen, color, (sx, sy, SEG_SIZE, SEG_SIZE), 2)
-
         if self.hover_valid:
             poi = self.world.poi_at(hx, hy)
             if poi:
@@ -388,33 +381,52 @@ class WorldScene(Scene):
     def _draw_player(self, screen, cam_x, cam_y):
         px = self.gx * SEG_SIZE - cam_x
         py = self.gy * SEG_SIZE - cam_y
-        color = (255, 60, 60) if self.state.stamina > 0 else (120, 40, 40)
+        color = self.state.class_def.color if self.state.stamina > 0 else (100, 60, 60)
         pg.draw.rect(screen, color, (px, py, SEG_SIZE, SEG_SIZE))
 
-    def _draw_stamina(self, screen):
+    def _draw_hud(self, screen):
         s = self.state
-        bar_w, bar_h = 220, 22
+        bar_w, bar_h = 220, 18
         x, y = 12, 12
-
-        pg.draw.rect(screen, (20, 20, 20), (x, y, bar_w, bar_h))
-        fill_w = int((bar_w - 4) * s.stamina_ratio)
+        # HP
+        self._bar(screen, x, y, bar_w, bar_h, s.hp_ratio, (220, 60, 60))
+        t = self._font_small.render(f"HP {s.hp}/{s.max_hp}", True, (255, 255, 255))
+        screen.blit(t, (x + bar_w + 8, y + 2))
+        # Stamina
+        y += bar_h + 4
         color = (220, 200, 60) if s.stamina_ratio > 0.3 else (220, 60, 60)
-        if fill_w > 0:
-            pg.draw.rect(screen, color, (x + 2, y + 2, fill_w, bar_h - 4))
-        pg.draw.rect(screen, (240, 240, 240), (x, y, bar_w, bar_h), 2)
+        self._bar(screen, x, y, bar_w, bar_h - 4, s.stamina_ratio, color)
+        t = self._font_small.render(
+            f"Силы {s.stamina}/{s.max_stamina}", True, (255, 255, 255)
+        )
+        screen.blit(t, (x + bar_w + 8, y))
+        # XP
+        y += bar_h
+        xp_r = s.xp / s.xp_to_next if s.xp_to_next else 0
+        self._bar(screen, x, y, bar_w, bar_h - 4, xp_r, (90, 180, 230))
+        t = self._font_small.render(
+            f"Ур. {s.level}  {s.xp}/{s.xp_to_next}", True, (255, 255, 255)
+        )
+        screen.blit(t, (x + bar_w + 8, y))
+        # Gold
+        y += bar_h
+        t = self._font_small.render(f"Золото: {s.gold}", True, (240, 220, 100))
+        screen.blit(t, (x, y))
 
-        text = f"Выносливость: {s.stamina}/{s.max_stamina}"
-        surf = self._font_small.render(text, True, (255, 255, 255))
-        screen.blit(surf, (x + bar_w + 8, y + 3))
+    def _bar(self, screen, x, y, w, h, ratio, color):
+        pg.draw.rect(screen, (30, 30, 30), (x, y, w, h))
+        fill = int((w - 4) * max(0.0, min(1.0, ratio)))
+        if fill > 0:
+            pg.draw.rect(screen, color, (x + 2, y + 2, fill, h - 4))
+        pg.draw.rect(screen, (200, 200, 200), (x, y, w, h), 1)
 
     def _draw_hint(self, screen):
         if self.mode == "spawn":
-            text = "ЛКМ / Enter — выбрать старт  |  WASD — панорама"
+            text = "ЛКМ / Enter — выбрать старт | WASD — панорама | I C K — панели"
         elif self.state.stamina > 0:
-            text = "WASD — шаг  |  Enter — войти в локацию"
+            text = "WASD — шаг | Enter — войти | I C K — панели"
         else:
-            text = "Нет сил идти — Enter, чтобы отдохнуть в локации"
-
+            text = "Нет сил — Enter для отдыха | I C K — панели"
         surf = self._font_hint.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)
