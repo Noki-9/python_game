@@ -3,9 +3,19 @@ import pygame as pg
 from core.camera import Camera
 from core.config import screen
 from core.scene_manager import Scene
+from world.biome import Biome
 
 SEG_SIZE = 16
 CAM_PAN_SPEED = 600
+
+# Стоимость шага по биому НАЗНАЧЕНИЯ
+BIOME_MOVE_COST = {
+    Biome.PLAINS: 1,
+    Biome.FOREST: 2,
+    Biome.DESERT: 3,
+    Biome.TUNDRA: 3,
+}
+DEFAULT_MOVE_COST = 1
 
 
 def _mix(a, b, t):
@@ -17,7 +27,6 @@ def _mix(a, b, t):
 
 
 def _edge_noise(gx, gy, direction, i):
-    """Детерминированный псевдослучайный [0,1) от координат и позиции."""
     d = {"N": 0, "S": 1, "W": 2, "E": 3}[direction]
     h = (gx * 73856093) ^ (gy * 19349663) ^ (d * 83492791) ^ (i * 2654435761)
     h = (h ^ (h >> 16)) * 0x85EBCA6B & 0xFFFFFFFF
@@ -28,9 +37,12 @@ def _edge_noise(gx, gy, direction, i):
 class WorldScene(Scene):
     def __init__(self, manager, world, world_pos=None, mode="spawn"):
         self.manager = manager
+        self.state = manager.player_state
         self.world = world
         self.mode = mode
-        self.gx, self.gy = world_pos if world_pos else (0, 0)
+
+        if world_pos is not None:
+            self.gx, self.gy = world_pos
 
         sw, sh = screen.get_size()
         self.camera = Camera(sw, sh)
@@ -39,11 +51,26 @@ class WorldScene(Scene):
 
         self.hover_seg = None
         self.hover_valid = False
-
-        # Пре-рендер карты — только один раз на инстанс WorldMap
         self._ensure_prerender()
 
-    # ---------- Пре-рендер ----------
+    # ---- Позиция как свойства → синхронизируется с state ----
+    @property
+    def gx(self):
+        return self.state.gx
+
+    @gx.setter
+    def gx(self, v):
+        self.state.gx = v
+
+    @property
+    def gy(self):
+        return self.state.gy
+
+    @gy.setter
+    def gy(self, v):
+        self.state.gy = v
+
+    # ---------------- Пре-рендер ----------------
     def _ensure_prerender(self):
         if getattr(self.world, "_prerender", None) is None:
             self._prerender_map()
@@ -52,7 +79,6 @@ class WorldScene(Scene):
         surf = pg.Surface((self.map_w_px, self.map_h_px))
         surf.fill((15, 15, 25))
 
-        # Проход 1: базовые цвета биомов
         for (gx, gy), seg in self.world.segments.items():
             pg.draw.rect(
                 surf,
@@ -60,7 +86,6 @@ class WorldScene(Scene):
                 (gx * SEG_SIZE, gy * SEG_SIZE, SEG_SIZE, SEG_SIZE),
             )
 
-        # Проход 2: дизеринг на границах
         for (gx, gy), seg in self.world.segments.items():
             for direction, (dx, dy) in (
                 ("N", (0, -1)),
@@ -76,28 +101,28 @@ class WorldScene(Scene):
                 nbr_walk = nbr.biome.walkable
 
                 if seg_walk and not nbr_walk:
-                    # мы проходимые, сосед непроходимый —
-                    # размываем НАШУ сторону цветом соседа
+                    # Проходимый рядом с непроходимым — размываем СВОЮ сторону
                     self._draw_edge_dither(
-                        surf, gx, gy, direction, seg.biome.color, nbr.biome.color
+                        surf,
+                        gx,
+                        gy,
+                        direction,
+                        seg.biome.color,
+                        nbr.biome.color,
+                        max_thickness=6,
                     )
-
                 elif not seg_walk and nbr_walk:
-                    # мы непроходимые, сосед проходимый —
-                    # переход сделает сосед со своей стороны, пропускаем
-                    continue
-
+                    continue  # сосед размоет себя сам
                 else:
-                    # оба проходимые / оба непроходимые —
-                    # дизеринг с обеих сторон
                     self._draw_edge_dither(
                         surf, gx, gy, direction, seg.biome.color, nbr.biome.color
                     )
 
         self.world._prerender = surf
 
-    def _draw_edge_dither(self, surface, gx, gy, direction, base, nbr_color):
-        """Раскидывает полоски цвета соседа у края с шумом — «мягкая» граница."""
+    def _draw_edge_dither(
+        self, surface, gx, gy, direction, base, nbr_color, max_thickness=5
+    ):
         sx, sy = gx * SEG_SIZE, gy * SEG_SIZE
         blend = _mix(base, nbr_color, 0.5)
         n_strips = SEG_SIZE // 2
@@ -105,8 +130,8 @@ class WorldScene(Scene):
         for i in range(n_strips):
             n = _edge_noise(gx, gy, direction, i)
             if n < 0.30:
-                continue  # пропуск — рваный край
-            thickness = int(1 + (n - 0.30) / 0.70 * 4)  # 1..5 px
+                continue
+            thickness = int(1 + (n - 0.30) / 0.70 * max_thickness)
             color = blend if n < 0.60 else nbr_color
 
             if direction == "N":
@@ -126,7 +151,7 @@ class WorldScene(Scene):
                     (sx + SEG_SIZE - thickness, sy + i * 2, thickness, 2),
                 )
 
-    # ---------- Жизненный цикл ----------
+    # ---------------- Жизненный цикл ----------------
     def on_enter(self, world_pos=None, mode=None):
         if mode is not None:
             self.mode = mode
@@ -134,6 +159,7 @@ class WorldScene(Scene):
             self.gx, self.gy = world_pos
         elif self.mode == "spawn":
             self.gx, self.gy = self._find_start_near_center()
+            self.state.restore()  # старт — полные силы
         self._center_camera()
 
     def _find_start_near_center(self):
@@ -158,7 +184,7 @@ class WorldScene(Scene):
             0, min(cy - self.camera.view_h / 2, self.map_h_px - self.camera.view_h)
         )
 
-    # ---------- Ввод ----------
+    # ---------------- Ввод ----------------
     def handle_event(self, event):
         if self.mode == "spawn":
             self._handle_spawn_input(event)
@@ -174,6 +200,7 @@ class WorldScene(Scene):
     def _handle_play_input(self, event):
         if event.type != pg.KEYDOWN:
             return
+
         dx = dy = 0
         if event.key == pg.K_w:
             dy = -1
@@ -184,11 +211,10 @@ class WorldScene(Scene):
         if event.key == pg.K_d:
             dx = 1
 
-        if (dx or dy) and self._can_move(dx, dy):
-            self.gx += dx
-            self.gy += dy
-            self._center_camera()
+        if dx or dy:
+            self._try_step(dx, dy)
 
+        # Enter работает всегда — даже при нулевой выносливости
         if event.key == pg.K_RETURN:
             seg = self.world.get(self.gx, self.gy)
             if seg and seg.biome.walkable:
@@ -198,11 +224,22 @@ class WorldScene(Scene):
                     LocalScene(self.manager, seg), return_pos=(self.gx, self.gy)
                 )
 
+    def _try_step(self, dx, dy):
+        if not self._can_move(dx, dy):
+            return
+        cost = self._move_cost(dx, dy)
+        if not self.state.spend(cost):
+            return  # не хватает выносливости
+        self.gx += dx
+        self.gy += dy
+        self._center_camera()
+
     def _try_pick_segment(self, screen_pos):
         gx, gy = self._screen_to_segment(screen_pos)
         if gx is None:
             return
         self.gx, self.gy = gx, gy
+        self.state.restore()  # точка старта — всегда с силами
         self.mode = "play"
         self._center_camera()
 
@@ -221,10 +258,17 @@ class WorldScene(Scene):
         seg = self.world.get(self.gx + dx, self.gy + dy)
         return seg is not None and seg.biome.walkable
 
-    # ---------- Update ----------
+    def _move_cost(self, dx, dy):
+        seg = self.world.get(self.gx + dx, self.gy + dy)
+        if seg is None:
+            return 999
+        return BIOME_MOVE_COST.get(seg.biome, DEFAULT_MOVE_COST)
+
+    # ---------------- Update ----------------
     def update(self, dt):
         if self.mode != "spawn":
             return
+
         keys = pg.key.get_pressed()
         pan_x = pan_y = 0
         if keys[pg.K_w]:
@@ -235,6 +279,7 @@ class WorldScene(Scene):
             pan_x -= 1
         if keys[pg.K_d]:
             pan_x += 1
+
         if pan_x or pan_y:
             self.camera.x = max(
                 0,
@@ -255,19 +300,18 @@ class WorldScene(Scene):
         self.hover_seg = (gx, gy) if gx is not None else None
         self.hover_valid = gx is not None
 
-    # ---------- Draw ----------
+    # ---------------- Draw ----------------
     def draw(self, screen):
         screen.fill((15, 15, 25))
         cam_x, cam_y = int(self.camera.x), int(self.camera.y)
 
-        # Блит только видимого куска пре-рендера
         screen.blit(
             self.world._prerender,
             (0, 0),
             (cam_x, cam_y, self.camera.view_w, self.camera.view_h),
         )
 
-        # Разведанные сегменты — динамическая обводка
+        # Разведанные — обводка
         tx0 = max(0, int(cam_x // SEG_SIZE) - 1)
         ty0 = max(0, int(cam_y // SEG_SIZE) - 1)
         tx1 = min(self.world.width, int((cam_x + self.camera.view_w) // SEG_SIZE) + 2)
@@ -293,6 +337,7 @@ class WorldScene(Scene):
         else:
             self._draw_player(screen, cam_x, cam_y)
 
+        self._draw_stamina(screen)
         self._draw_hint(screen)
 
     def _draw_hover(self, screen, cam_x, cam_y):
@@ -307,14 +352,36 @@ class WorldScene(Scene):
     def _draw_player(self, screen, cam_x, cam_y):
         px = self.gx * SEG_SIZE - cam_x
         py = self.gy * SEG_SIZE - cam_y
-        pg.draw.rect(screen, (255, 60, 60), (px, py, SEG_SIZE, SEG_SIZE))
+        # Если сил нет — маркер тускнеет
+        color = (255, 60, 60) if self.state.stamina > 0 else (120, 40, 40)
+        pg.draw.rect(screen, color, (px, py, SEG_SIZE, SEG_SIZE))
+
+    def _draw_stamina(self, screen):
+        s = self.state
+        bar_w, bar_h = 220, 22
+        x, y = 12, 12
+
+        pg.draw.rect(screen, (20, 20, 20), (x, y, bar_w, bar_h))
+        fill_w = int((bar_w - 4) * s.stamina_ratio)
+        color = (220, 200, 60) if s.stamina_ratio > 0.3 else (220, 60, 60)
+        if fill_w > 0:
+            pg.draw.rect(screen, color, (x + 2, y + 2, fill_w, bar_h - 4))
+        pg.draw.rect(screen, (240, 240, 240), (x, y, bar_w, bar_h), 2)
+
+        font = pg.font.SysFont(None, 18)
+        text = f"Выносливость: {s.stamina}/{s.max_stamina}"
+        surf = font.render(text, True, (255, 255, 255))
+        screen.blit(surf, (x + bar_w + 8, y + 3))
 
     def _draw_hint(self, screen):
         font = pg.font.SysFont(None, 22)
         if self.mode == "spawn":
-            text = "ЛКМ / Enter — выбрать стартовую точку  |  WASD — панорама"
-        else:
+            text = "ЛКМ / Enter — выбрать старт  |  WASD — панорама"
+        elif self.state.stamina > 0:
             text = "WASD — шаг  |  Enter — войти в локацию"
+        else:
+            text = "Нет сил идти — Enter, чтобы отдохнуть в локации"
+
         surf = font.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)

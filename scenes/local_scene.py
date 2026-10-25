@@ -43,6 +43,11 @@ class LocalScene(Scene):
 
     def on_enter(self, return_pos=None, entry_from=None):
         self.return_pos = return_pos
+
+        # Восстанавливаем выносливость при заходе в локацию
+        if hasattr(self.manager, "player_state"):
+            self.manager.player_state.restore()
+
         neighbors = self._get_neighbors()
         self.map = self.segment.get_local_map(neighbors=neighbors)
 

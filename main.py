@@ -3,6 +3,7 @@ from random import randint
 import pygame as pg
 
 from core.config import clock, screen
+from core.player_state import PlayerState
 from core.scene_manager import SceneManager
 from scenes.world_scene import WorldScene
 from world.world_map import WorldMap
@@ -13,6 +14,7 @@ def main():
     manager = SceneManager()
     world = WorldMap(seed=randint(1000, 9999))
     manager.world = world
+    manager.player_state = PlayerState(stamina=30, max_stamina=30)
 
     manager.switch(WorldScene(manager, world, mode="spawn"))
 
