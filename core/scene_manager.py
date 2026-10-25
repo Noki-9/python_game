@@ -22,6 +22,7 @@ class SceneManager:
         self.scene.on_enter(**kwargs)
 
     def push_ui(self, ui):
+        ui.manager = self
         self.ui_overlays.append(ui)
 
     def pop_ui(self):
@@ -39,6 +40,9 @@ class SceneManager:
             self.scene.handle_event(event)
 
     def update(self, dt):
+        if self.ui_overlays:
+            self.ui_overlays[-1].update(dt)
+            return
         if self.scene:
             self.scene.update(dt)
 

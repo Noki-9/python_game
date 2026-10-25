@@ -8,10 +8,12 @@ from core.config import TILE_SIZE, screen
 from core.scene_manager import Scene
 from models.player import Player
 from ui.character_ui import CharacterUI
+from ui.dialogue_ui import DialogueUI
 from ui.inventory_ui import InventoryUI
 from ui.skills_ui import SkillsUI
 from world.item_generator import roll_random_equipment
 from world.loot import GOLD, ITEMS_REGISTRY
+from world.npc_gen import spawn_npcs
 from world.spawn import spawn_animals, spawn_enemies
 
 COLORS = {
@@ -30,6 +32,7 @@ COLORS = {
 }
 
 PICKUP_RADIUS = 44
+NPC_INTERACT_RADIUS = 64
 
 
 class LocalScene(Scene):
@@ -40,6 +43,7 @@ class LocalScene(Scene):
         self.player = None
         self.enemies = []
         self.animals = []
+        self.npcs = []
         self.dropped_items = []
         self.return_pos = None
         self.notifications = []
@@ -47,6 +51,7 @@ class LocalScene(Scene):
         self._font_hint = pg.font.SysFont(None, 22)
         self._font_label = pg.font.SysFont(None, 24)
         self._font_hud = pg.font.SysFont(None, 18)
+        self._font_npc = pg.font.SysFont(None, 16)
 
     def _get_neighbors(self):
         world = getattr(self.manager, "world", None)
@@ -115,12 +120,19 @@ class LocalScene(Scene):
             self.segment.seed,
         )
 
+        if self.segment.location_type.is_settlement:
+            is_start = self.segment.location_type.value == "starting_village"
+            self.npcs = spawn_npcs(self.map, self.segment.seed, is_starting=is_start)
+        else:
+            self.npcs = []
+
         if self.segment.cleared:
             self.notifications.append(("Локация уже зачищена", 3.0))
 
     def on_exit(self):
         self.segment.reset_if_unfinished()
 
+    # -------- Ввод --------
     def handle_event(self, event):
         if event.type == pg.KEYDOWN:
             if event.key == pg.K_ESCAPE:
@@ -148,12 +160,32 @@ class LocalScene(Scene):
                 )
                 return
             if event.key == pg.K_e:
-                self._try_interact()
+                npc = self._find_npc_near()
+                if npc is not None:
+                    self.manager.push_ui(
+                        DialogueUI(screen.get_size(), self.manager.player_state, npc)
+                    )
+                else:
+                    self._try_interact()
             elif event.key == pg.K_SPACE:
                 self._player_attack()
 
         elif event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
             self._player_attack()
+
+    def _find_npc_near(self):
+        px = self.player.x + self.player.rect_x / 2
+        py = self.player.y + self.player.rect_y / 2
+        best = None
+        best_d = NPC_INTERACT_RADIUS
+        for npc in self.npcs:
+            nx = npc.x + npc.rect_x / 2
+            ny = npc.y + npc.rect_y / 2
+            d = math.hypot(nx - px, ny - py)
+            if d < best_d:
+                best = npc
+                best_d = d
+        return best
 
     def _try_interact(self):
         if not self.segment.location_type.is_quest:
@@ -184,8 +216,6 @@ class LocalScene(Scene):
     def _on_enemy_killed(self, enemy):
         state = self.manager.player_state
         rng = random.Random(enemy.loot_rng_seed)
-
-        # Ресурсы
         loot = enemy.drop_loot(rng)
         for item_id, count in loot.items():
             template = ITEMS_REGISTRY.get(item_id)
@@ -194,17 +224,12 @@ class LocalScene(Scene):
             item = template.copy()
             item.count = count
             self.dropped_items.append((item, enemy.x, enemy.y))
-
-        # Шанс на экипировку
         if rng.random() < 0.20:
             equip = roll_random_equipment(rng)
             if equip:
                 self.dropped_items.append((equip, enemy.x, enemy.y))
-
-        # XP
         state.add_xp(enemy.xp_reward)
         self.notifications.append((f"+{enemy.xp_reward} XP", 1.5))
-
         self._check_quest_completion()
 
     def _check_quest_completion(self):
@@ -224,12 +249,12 @@ class LocalScene(Scene):
         self.segment.cleared = True
         if self.segment.poi:
             self.segment.poi.cleared = True
-
         state = self.manager.player_state
         state.add_gold(100)
         state.add_xp(250)
         self.notifications.append(("Локация зачищена! +100 золота, +250 XP", 4.0))
 
+    # -------- Update --------
     def update(self, dt):
         if not self.player.is_alive():
             self._on_player_death()
@@ -300,7 +325,6 @@ class LocalScene(Scene):
         state.gold -= lost
         state.hp = state.max_hp
         state.restore()
-
         from scenes.world_scene import WorldScene
 
         self.manager.switch(
@@ -309,6 +333,7 @@ class LocalScene(Scene):
             mode="play",
         )
 
+    # -------- Draw --------
     def draw(self, screen):
         screen.fill((20, 20, 20))
 
@@ -333,6 +358,9 @@ class LocalScene(Scene):
         for e in self.enemies:
             if e.is_alive():
                 e.draw(screen, self.camera)
+
+        for npc in self.npcs:
+            npc.draw(screen, self.camera, self._font_npc)
 
         for item, x, y in self.dropped_items:
             sx, sy = self.camera.apply(x + 12, y + 12)
@@ -410,7 +438,7 @@ class LocalScene(Scene):
         pg.draw.rect(screen, (200, 200, 200), (x, y, w, h), 1)
 
     def _draw_notifications(self, screen):
-        y = 130
+        y = 140
         for txt, t in self.notifications:
             alpha = 255 if t >= 1.0 else int(255 * t)
             surf = self._font_hint.render(txt, True, (255, 240, 100))
@@ -419,7 +447,10 @@ class LocalScene(Scene):
             y += 24
 
     def _draw_hint(self, screen):
-        if self.segment.location_type.is_quest and not self.segment.cleared:
+        npc = self._find_npc_near() if self.npcs else None
+        if npc:
+            text = f"E — поговорить с {npc.name} | ЛКМ — атака | I C K | Esc"
+        elif self.segment.location_type.is_quest and not self.segment.cleared:
             text = "WASD | ЛКМ/Пробел — атака | E — взаимодействие | I C K | Esc"
         else:
             text = "WASD | ЛКМ/Пробел — атака | I C K | Esc"

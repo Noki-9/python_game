@@ -5,17 +5,14 @@ from models.item import Item, ItemType
 
 class PlayerState:
     def __init__(self, gx=0, gy=0, stamina=30, max_stamina=30, class_id="warrior"):
-        # Позиция
         self.gx = gx
         self.gy = gy
         self.stamina = stamina
         self.max_stamina = max_stamina
 
-        # Класс
         self.class_id = class_id
         self.class_def = CLASSES[class_id]
 
-        # Базовые характеристики
         self.base_strength = self.class_def.base_strength
         self.base_agility = self.class_def.base_agility
         self.base_intelligence = self.class_def.base_intelligence
@@ -23,35 +20,33 @@ class PlayerState:
 
         self.stat_points = 0
 
-        # Прогресс
         self.level = 1
         self.xp = 0
         self.xp_to_next = 100
         self.gold = 0
 
-        # Инвентарь и экипировка
+        self.reputation = 0
+        self.active_quests = []
+
         self.inventory: list[Item] = []
+        from models.item import EQUIP_SLOTS
+
         self.equipment: dict[ItemType, Item | None] = {
-            slot: None
-            for slot in ItemType
-            if slot in __import__("models.item", fromlist=["EQUIP_SLOTS"]).EQUIP_SLOTS
+            slot: None for slot in EQUIP_SLOTS
         }
 
-        # Навыки
         self.unlocked_skills: set[str] = set()
         self.skill_points = 0
 
-        # Стартовое снаряжение
         from world.item_generator import starting_equipment
 
         for item in starting_equipment(class_id):
             self.inventory.append(item)
             self.equip(item)
 
-        # HP после экипировки
         self.hp = self.max_hp
 
-    # ============ Derived характеристики ============
+    # ... (все остальные методы из предыдущей версии — без изменений) ...
 
     @property
     def bonus_stats(self):
@@ -66,7 +61,6 @@ class PlayerState:
             "defense": 0,
             "move_stamina": 0,
         }
-
         for item in self.equipment.values():
             if item is None:
                 continue
@@ -78,7 +72,6 @@ class PlayerState:
             s["attack"] += item.bonus_attack
             s["crit"] += item.bonus_crit
             s["defense"] += item.bonus_defense
-
         for skill_id in self.unlocked_skills:
             node = self._find_skill(skill_id)
             if not node:
@@ -159,8 +152,6 @@ class PlayerState:
     def hp_ratio(self):
         return self.hp / self.max_hp if self.max_hp else 0.0
 
-    # ============ Выносливость ============
-
     def can_move(self, cost=1):
         return self.stamina >= cost
 
@@ -173,8 +164,6 @@ class PlayerState:
     def restore(self):
         self.stamina = self.max_stamina
 
-    # ============ HP ============
-
     def heal(self, amount):
         self.hp = min(self.max_hp, self.hp + amount)
 
@@ -182,8 +171,6 @@ class PlayerState:
         reduced = max(1, amount - self.defense)
         self.hp = max(0, self.hp - reduced)
         return self.hp <= 0
-
-    # ============ Прогресс ============
 
     def add_gold(self, amount):
         self.gold += max(0, amount)
@@ -201,8 +188,6 @@ class PlayerState:
             leveled += 1
         return leveled
 
-    # ============ Очки статов ============
-
     def spend_stat_point(self, stat_name):
         if self.stat_points <= 0:
             return False
@@ -218,8 +203,6 @@ class PlayerState:
             return False
         self.stat_points -= 1
         return True
-
-    # ============ Навыки ============
 
     def can_unlock_skill(self, node):
         if node.skill_id in self.unlocked_skills:
@@ -240,8 +223,6 @@ class PlayerState:
         self.skill_points -= node.cost
         return True
 
-    # ============ Инвентарь ============
-
     def add_item(self, item: Item):
         if item.is_stackable:
             for existing in self.inventory:
@@ -249,8 +230,6 @@ class PlayerState:
                     existing.count += item.count
                     return
         self.inventory.append(item)
-
-    # ============ Экипировка ============
 
     def equip(self, item: Item):
         if not item.is_equipment:
