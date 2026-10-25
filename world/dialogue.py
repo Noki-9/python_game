@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 @dataclass
 class DialogueOption:
     label: str
-    action: str  # next | close | trade | heal | quest
+    action: str
     next_node: str = None
     cost: int = 0
     heal_amount: int = 0
@@ -46,10 +46,10 @@ DIALOGUES = {
             "Ты выглядишь измотанным. Могу подлечить за скромную плату.",
             [
                 DialogueOption(
-                    "Подлечить (10 золота, +40 HP)", "heal", cost=10, heal_amount=40
+                    "Подлечить (10 зол., +40 HP)", "heal", cost=10, heal_amount=40
                 ),
                 DialogueOption(
-                    "Подлечить полностью (25 золота)", "heal", cost=25, heal_amount=999
+                    "Подлечить полностью (25 зол.)", "heal", cost=25, heal_amount=999
                 ),
                 DialogueOption("Спасибо, я в порядке", "close"),
             ],
@@ -70,8 +70,8 @@ DIALOGUES = {
             [DialogueOption("Понятно", "close")],
         ),
         "hint": DialogueNode(
-            "Ищи красные метки на карте — это места, где можно испытать себя\n"
-            "и обрести славу. А деревни дадут кров и отдых.",
+            "Ищи красные метки на карте — это места, где можно испытать себя.\n"
+            "А деревни дадут кров и отдых.",
             [DialogueOption("Спасибо", "close")],
         ),
     },
@@ -79,14 +79,15 @@ DIALOGUES = {
         "root": DialogueNode(
             "У меня есть дело для тебя, странник. Слушай внимательно.",
             [
+                DialogueOption("Дай мне задание", "get_quest"),
                 DialogueOption("Что нужно сделать?", "next", next_node="task"),
                 DialogueOption("Не сейчас", "close"),
             ],
         ),
         "task": DialogueNode(
-            "В округе неспокойно. Найди квестовую локацию (красная метка)\n"
-            "и зачисти её — щедро награжу.",
-            [DialogueOption("Принято", "close")],
+            "Зачищай квестовые локации (красные метки), охоться на зверей,\n"
+            "приноси ресурсы — за всё плачу щедро.",
+            [DialogueOption("Понятно", "close")],
         ),
     },
     "guard": {

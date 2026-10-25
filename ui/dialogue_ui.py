@@ -2,12 +2,14 @@ import pygame as pg
 
 from ui.overlay import UIOverlay
 from world.dialogue import DIALOGUES
+from world.quest_gen import generate_quest
 
 
 class DialogueUI(UIOverlay):
-    def __init__(self, screen_size, player_state, npc):
+    def __init__(self, screen_size, player_state, npc, world=None):
         super().__init__(screen_size, player_state)
         self.npc = npc
+        self.world = world
         self.dialogues = DIALOGUES.get(npc.role, {})
         self.current_node = "root"
         self.option_rects = []
@@ -60,12 +62,31 @@ class DialogueUI(UIOverlay):
             self.state.heal(option.heal_amount)
             self._flash(f"Подлечено! +{option.heal_amount} HP")
 
-        elif option.action == "quest":
-            self._flash("Квест принят (журнал появится позже)")
+        elif option.action == "get_quest":
+            self._give_quest()
+
+    def _give_quest(self):
+        if self.world is None:
+            self._flash("Квесты недоступны")
+            return
+
+        if self.state.quest_log.has_active_from(self.npc.npc_id):
+            self._flash("Сначала выполни текущее задание")
+            return
+
+        seed = (
+            hash((self.npc.npc_id, self.state.level, len(self.state.quest_log.quests)))
+            & 0xFFFFFFFF
+        )
+        quest = generate_quest(self.world, self.npc, seed, self.state.level)
+        if self.state.quest_log.add(quest):
+            self._flash(f"Новый квест: {quest.title}")
+        else:
+            self._flash("У меня больше нет заданий")
 
     def _flash(self, text):
         self.message = text
-        self.message_timer = 2.0
+        self.message_timer = 2.5
 
     def update(self, dt):
         if self.message_timer > 0:
@@ -74,7 +95,6 @@ class DialogueUI(UIOverlay):
     def draw(self, screen):
         super().draw(screen)
 
-        # Заголовок
         title = self.font_big.render(
             f"{self.npc.name} — {self.npc.role_title}",
             True,
@@ -86,14 +106,12 @@ class DialogueUI(UIOverlay):
         if node is None:
             return
 
-        # Текст
         y = 120
         for line in node.text.split("\n"):
             surf = self.font_med.render(line, True, (240, 240, 240))
             screen.blit(surf, ((self.width - surf.get_width()) // 2, y))
             y += 28
 
-        # Опции
         y = 260
         self.option_rects = []
         for i, option in enumerate(node.options):
@@ -106,12 +124,10 @@ class DialogueUI(UIOverlay):
             self.option_rects.append(rect)
             y += 42
 
-        # Flash-сообщение
         if self.message_timer > 0:
             surf = self.font_med.render(self.message, True, (255, 230, 120))
             screen.blit(surf, ((self.width - surf.get_width()) // 2, y + 20))
 
-        # Подсказка
         hint = self.font_small.render(
             "ЛКМ или 1-9 — выбрать, Esc — закрыть", True, (150, 150, 150)
         )

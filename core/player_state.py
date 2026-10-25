@@ -1,6 +1,7 @@
 from core.classes import CLASSES
 from core.skills import ALL_SKILLS
-from models.item import Item, ItemType
+from models.item import EQUIP_SLOTS, Item, ItemType
+from world.quest import QuestLog
 
 
 class PlayerState:
@@ -26,17 +27,16 @@ class PlayerState:
         self.gold = 0
 
         self.reputation = 0
-        self.active_quests = []
 
         self.inventory: list[Item] = []
-        from models.item import EQUIP_SLOTS
-
         self.equipment: dict[ItemType, Item | None] = {
             slot: None for slot in EQUIP_SLOTS
         }
 
         self.unlocked_skills: set[str] = set()
         self.skill_points = 0
+
+        self.quest_log = QuestLog()
 
         from world.item_generator import starting_equipment
 
@@ -46,8 +46,7 @@ class PlayerState:
 
         self.hp = self.max_hp
 
-    # ... (все остальные методы из предыдущей версии — без изменений) ...
-
+    # ========== Derived ==========
     @property
     def bonus_stats(self):
         s = {
@@ -152,6 +151,7 @@ class PlayerState:
     def hp_ratio(self):
         return self.hp / self.max_hp if self.max_hp else 0.0
 
+    # ========== Выносливость ==========
     def can_move(self, cost=1):
         return self.stamina >= cost
 
@@ -164,6 +164,7 @@ class PlayerState:
     def restore(self):
         self.stamina = self.max_stamina
 
+    # ========== HP ==========
     def heal(self, amount):
         self.hp = min(self.max_hp, self.hp + amount)
 
@@ -172,6 +173,7 @@ class PlayerState:
         self.hp = max(0, self.hp - reduced)
         return self.hp <= 0
 
+    # ========== Прогресс ==========
     def add_gold(self, amount):
         self.gold += max(0, amount)
 
@@ -204,6 +206,7 @@ class PlayerState:
         self.stat_points -= 1
         return True
 
+    # ========== Навыки ==========
     def can_unlock_skill(self, node):
         if node.skill_id in self.unlocked_skills:
             return False
@@ -223,6 +226,7 @@ class PlayerState:
         self.skill_points -= node.cost
         return True
 
+    # ========== Инвентарь ==========
     def add_item(self, item: Item):
         if item.is_stackable:
             for existing in self.inventory:
@@ -250,3 +254,10 @@ class PlayerState:
         self.equipment[slot_type] = None
         self.inventory.append(item)
         return True
+
+    # ========== Квесты ==========
+    def grant_quest_reward(self, quest):
+        self.add_gold(quest.reward_gold)
+        self.add_xp(quest.reward_xp)
+        if quest.consume_items:
+            quest.consume_required_items(self.inventory)

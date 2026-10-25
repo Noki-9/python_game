@@ -10,6 +10,7 @@ from models.player import Player
 from ui.character_ui import CharacterUI
 from ui.dialogue_ui import DialogueUI
 from ui.inventory_ui import InventoryUI
+from ui.quest_log_ui import QuestLogUI
 from ui.skills_ui import SkillsUI
 from world.item_generator import roll_random_equipment
 from world.loot import GOLD, ITEMS_REGISTRY
@@ -126,13 +127,16 @@ class LocalScene(Scene):
         else:
             self.npcs = []
 
+        # синхронизация FETCH-квестов
+        self._sync_fetch_quests()
+
         if self.segment.cleared:
             self.notifications.append(("Локация уже зачищена", 3.0))
 
     def on_exit(self):
         self.segment.reset_if_unfinished()
 
-    # -------- Ввод --------
+    # ---------- Ввод ----------
     def handle_event(self, event):
         if event.type == pg.KEYDOWN:
             if event.key == pg.K_ESCAPE:
@@ -159,11 +163,21 @@ class LocalScene(Scene):
                     SkillsUI(screen.get_size(), self.manager.player_state)
                 )
                 return
+            if event.key == pg.K_j:
+                self.manager.push_ui(
+                    QuestLogUI(screen.get_size(), self.manager.player_state)
+                )
+                return
             if event.key == pg.K_e:
                 npc = self._find_npc_near()
                 if npc is not None:
                     self.manager.push_ui(
-                        DialogueUI(screen.get_size(), self.manager.player_state, npc)
+                        DialogueUI(
+                            screen.get_size(),
+                            self.manager.player_state,
+                            npc,
+                            world=self.manager.world,
+                        )
                     )
                 else:
                     self._try_interact()
@@ -230,7 +244,29 @@ class LocalScene(Scene):
                 self.dropped_items.append((equip, enemy.x, enemy.y))
         state.add_xp(enemy.xp_reward)
         self.notifications.append((f"+{enemy.xp_reward} XP", 1.5))
+
+        # квесты по убийству
+        finished = state.quest_log.notify_kill(enemy.enemy_id)
+        self._on_quests_completed(finished)
+
         self._check_quest_completion()
+
+    def _on_quests_completed(self, finished):
+        state = self.manager.player_state
+        for q in finished:
+            state.grant_quest_reward(q)
+            self.notifications.append(
+                (
+                    f"Квест выполнен: {q.title} "
+                    f"(+{q.reward_gold} зол., +{q.reward_xp} XP)",
+                    4.0,
+                )
+            )
+
+    def _sync_fetch_quests(self):
+        state = self.manager.player_state
+        finished = state.quest_log.notify_inventory(state.inventory)
+        self._on_quests_completed(finished)
 
     def _check_quest_completion(self):
         if not self.segment.location_type.is_quest:
@@ -249,12 +285,18 @@ class LocalScene(Scene):
         self.segment.cleared = True
         if self.segment.poi:
             self.segment.poi.cleared = True
+
         state = self.manager.player_state
         state.add_gold(100)
         state.add_xp(250)
         self.notifications.append(("Локация зачищена! +100 золота, +250 XP", 4.0))
 
-    # -------- Update --------
+        # CLEAR-квесты
+        if self.segment.poi:
+            finished = state.quest_log.notify_location_cleared(self.segment.poi.name)
+            self._on_quests_completed(finished)
+
+    # ---------- Update ----------
     def update(self, dt):
         if not self.player.is_alive():
             self._on_player_death()
@@ -299,6 +341,7 @@ class LocalScene(Scene):
     def _collect_drops(self):
         state = self.manager.player_state
         remaining = []
+        had_fetch = False
         for item, x, y in self.dropped_items:
             dx = self.player.x - x
             dy = self.player.y - y
@@ -307,6 +350,7 @@ class LocalScene(Scene):
                     state.add_gold(item.count)
                 else:
                     state.add_item(item)
+                    had_fetch = True
                 self.notifications.append(
                     (
                         f"+{item.count} {item.name}"
@@ -318,6 +362,9 @@ class LocalScene(Scene):
             else:
                 remaining.append((item, x, y))
         self.dropped_items = remaining
+
+        if had_fetch:
+            self._sync_fetch_quests()
 
     def _on_player_death(self):
         state = self.manager.player_state
@@ -333,7 +380,7 @@ class LocalScene(Scene):
             mode="play",
         )
 
-    # -------- Draw --------
+    # ---------- Draw ----------
     def draw(self, screen):
         screen.fill((20, 20, 20))
 
@@ -377,6 +424,7 @@ class LocalScene(Scene):
 
         self._draw_label(screen)
         self._draw_hud(screen)
+        self._draw_active_quests(screen)
         self._draw_notifications(screen)
         self._draw_hint(screen)
 
@@ -430,6 +478,24 @@ class LocalScene(Scene):
             )
             screen.blit(surf, (10, y))
 
+    def _draw_active_quests(self, screen):
+        quests = self.manager.player_state.quest_log.active()
+        if not quests:
+            return
+        x = 10
+        y = 130
+        title = self._font_hud.render(
+            f"Активные квесты ({len(quests)})  [J]", True, (240, 220, 100)
+        )
+        screen.blit(title, (x, y))
+        y += 20
+        for q in quests[:3]:
+            obj = q.objective
+            text = f"• {q.title}: {obj.progress_str}"
+            surf = self._font_hud.render(text, True, (220, 220, 200))
+            screen.blit(surf, (x + 4, y))
+            y += 18
+
     def _bar(self, screen, x, y, w, h, ratio, color):
         pg.draw.rect(screen, (30, 30, 30), (x, y, w, h))
         fill = int((w - 4) * max(0.0, min(1.0, ratio)))
@@ -438,7 +504,7 @@ class LocalScene(Scene):
         pg.draw.rect(screen, (200, 200, 200), (x, y, w, h), 1)
 
     def _draw_notifications(self, screen):
-        y = 140
+        y = screen.get_height() - 180
         for txt, t in self.notifications:
             alpha = 255 if t >= 1.0 else int(255 * t)
             surf = self._font_hint.render(txt, True, (255, 240, 100))
@@ -449,11 +515,11 @@ class LocalScene(Scene):
     def _draw_hint(self, screen):
         npc = self._find_npc_near() if self.npcs else None
         if npc:
-            text = f"E — поговорить с {npc.name} | ЛКМ — атака | I C K | Esc"
+            text = f"E — поговорить с {npc.name} | ЛКМ — атака | I C K J | Esc"
         elif self.segment.location_type.is_quest and not self.segment.cleared:
-            text = "WASD | ЛКМ/Пробел — атака | E — взаимодействие | I C K | Esc"
+            text = "WASD | ЛКМ — атака | E — взаимодействие | I C K J | Esc"
         else:
-            text = "WASD | ЛКМ/Пробел — атака | I C K | Esc"
+            text = "WASD | ЛКМ — атака | I C K J | Esc"
         surf = self._font_hint.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)

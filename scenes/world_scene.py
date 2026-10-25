@@ -195,6 +195,11 @@ class WorldScene(Scene):
             if event.key == pg.K_k:
                 self.manager.push_ui(SkillsUI(screen.get_size(), self.state))
                 return
+            if event.key == pg.K_j:
+                from ui.quest_log_ui import QuestLogUI
+
+                self.manager.push_ui(QuestLogUI(screen.get_size(), self.state))
+                return
 
         if self.mode == "spawn":
             self._handle_spawn_input(event)
@@ -422,11 +427,11 @@ class WorldScene(Scene):
 
     def _draw_hint(self, screen):
         if self.mode == "spawn":
-            text = "ЛКМ / Enter — выбрать старт | WASD — панорама | I C K — панели"
+            text = "ЛКМ / Enter — выбрать старт | WASD — панорама | I C K J — панели"
         elif self.state.stamina > 0:
-            text = "WASD — шаг | Enter — войти | I C K — панели"
+            text = "WASD — шаг | Enter — войти | I C K J — панели"
         else:
-            text = "Нет сил — Enter для отдыха | I C K — панели"
+            text = "Нет сил — Enter для отдыха | I C K J — панели"
         surf = self._font_hint.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)
