@@ -1,10 +1,20 @@
+import math
+
 import pygame as pg
 
 from core.camera import Camera
-from core.config import VISION_RADIUS, screen
+from core.config import (
+    MEMORY_VISIBILITY,
+    VISION_FAR,
+    VISION_FAR_SQ,
+    VISION_NEAR,
+    VISION_NEAR_SQ,
+    screen,
+)
 from core.scene_manager import Scene
 from ui.character_ui import CharacterUI
 from ui.inventory_ui import InventoryUI
+from ui.quest_log_ui import QuestLogUI
 from ui.skills_ui import SkillsUI
 from world.biome import Biome
 
@@ -18,6 +28,9 @@ BIOME_MOVE_COST = {
     Biome.TUNDRA: 3,
 }
 DEFAULT_MOVE_COST = 1
+
+MINIMAP_W = 180
+MINIMAP_H = 144
 
 
 def _mix(a, b, t):
@@ -60,6 +73,12 @@ class WorldScene(Scene):
         self._font_hint = pg.font.SysFont(None, 22)
         self._font_small = pg.font.SysFont(None, 16)
 
+        # Кэши
+        self._fog_surface = None
+        self._minimap_surf = None
+        self._minimap_dirty = True
+        self._minimap_full = None
+
         self._ensure_prerender()
 
     @property
@@ -78,7 +97,7 @@ class WorldScene(Scene):
     def gy(self, v):
         self.state.gy = v
 
-    # ---------- Пре-рендер ----------
+    # ---------------- Пре-рендер ----------------
     def _ensure_prerender(self):
         if getattr(self.world, "_prerender", None) is None:
             self._prerender_map()
@@ -121,7 +140,6 @@ class WorldScene(Scene):
                     self._draw_edge_dither(
                         surf, gx, gy, direction, seg.biome.color, nbr.biome.color
                     )
-
         self.world._prerender = surf
 
     def _draw_edge_dither(
@@ -153,25 +171,63 @@ class WorldScene(Scene):
                     (sx + SEG_SIZE - thickness, sy + i * 2, thickness, 2),
                 )
 
-    # ---------- Туман ----------
-    def _update_explored(self):
-        r = VISION_RADIUS
-        r2 = r * r
+    # ---------------- Туман войны ----------------
+    def _segment_visibility(self, gx, gy) -> float:
+        """0.0 = чёрный, 1.0 = полностью виден."""
+        seg = self.world.get(gx, gy)
+        if seg is None:
+            return 0.0
+
+        dx = gx - self.gx
+        dy = gy - self.gy
+        d2 = dx * dx + dy * dy
+
+        if d2 <= VISION_NEAR_SQ:
+            return 1.0
+
+        if d2 >= VISION_FAR_SQ:
+            return MEMORY_VISIBILITY if seg.explored else 0.0
+
+        d = math.sqrt(d2)
+        t = (d - VISION_NEAR) / (VISION_FAR - VISION_NEAR)
+        t = t * t * (3.0 - 2.0 * t)  # smoothstep
+        current = 1.0 - t
+
+        if seg.explored:
+            return MEMORY_VISIBILITY + current * (1.0 - MEMORY_VISIBILITY)
+        return current
+
+    def _reveal_around_player(self):
+        """Размечает FAR-радиус как explored; при новых — флаг для мини-карты."""
+        r = VISION_FAR
+        r2 = VISION_FAR_SQ
+        new_reveal = False
         for dy in range(-r, r + 1):
             for dx in range(-r, r + 1):
                 if dx * dx + dy * dy > r2:
                     continue
                 seg = self.world.get(self.gx + dx, self.gy + dy)
-                if seg is not None:
+                if seg is not None and not seg.explored:
                     seg.explored = True
+                    new_reveal = True
+        if new_reveal:
+            self._minimap_dirty = True
 
+    # ---------------- Жизненный цикл ----------------
     def on_enter(self, world_pos=None, mode=None):
         if mode is not None:
             self.mode = mode
         if world_pos is not None:
             self.gx, self.gy = world_pos
-            self._update_explored()
+        elif self.mode == "spawn":
+            self.gx = self.world.start_gx
+            self.gy = self.world.start_gy
+        else:
+            self.gx = self.world.start_gx
+            self.gy = self.world.start_gy
         self._center_camera()
+        if self.mode == "play":
+            self._reveal_around_player()
 
     def _center_camera(self):
         cx = self.gx * SEG_SIZE + SEG_SIZE / 2
@@ -183,7 +239,7 @@ class WorldScene(Scene):
             0, min(cy - self.camera.view_h / 2, self.map_h_px - self.camera.view_h)
         )
 
-    # ---------- Ввод ----------
+    # ---------------- Ввод ----------------
     def handle_event(self, event):
         if event.type == pg.KEYDOWN:
             if event.key == pg.K_i:
@@ -196,8 +252,6 @@ class WorldScene(Scene):
                 self.manager.push_ui(SkillsUI(screen.get_size(), self.state))
                 return
             if event.key == pg.K_j:
-                from ui.quest_log_ui import QuestLogUI
-
                 self.manager.push_ui(QuestLogUI(screen.get_size(), self.state))
                 return
 
@@ -243,7 +297,7 @@ class WorldScene(Scene):
             return
         self.gx += dx
         self.gy += dy
-        self._update_explored()
+        self._reveal_around_player()
         self._center_camera()
 
     def _try_pick_segment(self, screen_pos):
@@ -253,7 +307,7 @@ class WorldScene(Scene):
         self.gx, self.gy = gx, gy
         self.state.restore()
         self.mode = "play"
-        self._update_explored()
+        self._reveal_around_player()
         self._center_camera()
 
     def _screen_to_segment(self, screen_pos):
@@ -275,10 +329,12 @@ class WorldScene(Scene):
             return 999
         return BIOME_MOVE_COST.get(seg.biome, DEFAULT_MOVE_COST)
 
-    # ---------- Update ----------
+    # ---------------- Update ----------------
     def update(self, dt):
-        if self.mode != "spawn":
+        if self.mode == "play":
+            self._reveal_around_player()
             return
+
         keys = pg.key.get_pressed()
         pan_x = pan_y = 0
         if keys[pg.K_w]:
@@ -289,6 +345,7 @@ class WorldScene(Scene):
             pan_x -= 1
         if keys[pg.K_d]:
             pan_x += 1
+
         if pan_x or pan_y:
             self.camera.x = max(
                 0,
@@ -309,47 +366,34 @@ class WorldScene(Scene):
         self.hover_seg = (gx, gy) if gx is not None else None
         self.hover_valid = gx is not None
 
-    # ---------- Draw ----------
+    # ---------------- Draw ----------------
     def draw(self, screen):
         screen.fill((15, 15, 25))
         cam_x, cam_y = int(self.camera.x), int(self.camera.y)
+
+        # 1. Террейн (пре-рендер)
         screen.blit(
             self.world._prerender,
             (0, 0),
             (cam_x, cam_y, self.camera.view_w, self.camera.view_h),
         )
 
-        self._draw_fog(screen, cam_x, cam_y)
+        # 2. POI — до тумана, чтобы он их тоже затемнял
         self._draw_pois(screen, cam_x, cam_y)
 
+        # 3. Туман (градиент поверх террейна и POI)
+        self._draw_fog(screen, cam_x, cam_y)
+
+        # 4. Игрок / hover — над туманом
         if self.mode == "spawn":
             self._draw_hover(screen, cam_x, cam_y)
         else:
             self._draw_player(screen, cam_x, cam_y)
 
+        # 5. HUD + мини-карта
         self._draw_hud(screen)
+        self._draw_minimap(screen)
         self._draw_hint(screen)
-
-    def _draw_fog(self, screen, cam_x, cam_y):
-        if self.mode == "spawn":
-            return
-        tx0, ty0, tx1, ty1 = self.camera.visible_tile_range(SEG_SIZE)
-        tx1 = min(tx1, self.world.width)
-        ty1 = min(ty1, self.world.height)
-        for gy in range(ty0, ty1):
-            for gx in range(tx0, tx1):
-                seg = self.world.segments.get((gx, gy))
-                if seg is None or seg.explored:
-                    continue
-                sx = gx * SEG_SIZE - cam_x
-                sy = gy * SEG_SIZE - cam_y
-                pg.draw.rect(screen, (8, 8, 12), (sx, sy, SEG_SIZE, SEG_SIZE))
-
-    def _is_poi_visible(self, poi):
-        if self.mode == "spawn":
-            return True
-        seg = self.world.get(poi.gx, poi.gy)
-        return seg is not None and seg.explored
 
     def _draw_pois(self, screen, cam_x, cam_y):
         for poi in self.world.pois:
@@ -368,6 +412,43 @@ class WorldScene(Scene):
             center = (sx + SEG_SIZE // 2, sy + SEG_SIZE // 2)
             pg.draw.circle(screen, color, center, 6)
             pg.draw.circle(screen, (20, 20, 20), center, 6, 1)
+
+    def _is_poi_visible(self, poi):
+        if self.mode == "spawn":
+            return True
+        seg = self.world.get(poi.gx, poi.gy)
+        return seg is not None and seg.explored
+
+    def _draw_fog(self, screen, cam_x, cam_y):
+        if self.mode == "spawn":
+            return
+
+        vw, vh = self.camera.view_w, self.camera.view_h
+        if self._fog_surface is None or self._fog_surface.get_size() != (vw, vh):
+            self._fog_surface = pg.Surface((vw, vh), pg.SRCALPHA)
+        self._fog_surface.fill((0, 0, 0, 0))
+
+        tx0 = max(0, int(self.camera.x // SEG_SIZE) - 1)
+        ty0 = max(0, int(self.camera.y // SEG_SIZE) - 1)
+        tx1 = min(self.world.width, int((self.camera.x + vw) // SEG_SIZE) + 2)
+        ty1 = min(self.world.height, int((self.camera.y + vh) // SEG_SIZE) + 2)
+
+        for gy in range(ty0, ty1):
+            for gx in range(tx0, tx1):
+                vis = self._segment_visibility(gx, gy)
+                if vis >= 0.999:
+                    continue
+                alpha = int((1.0 - vis) * 255)
+                if alpha <= 0:
+                    continue
+                sx = gx * SEG_SIZE - cam_x
+                sy = gy * SEG_SIZE - cam_y
+                self._fog_surface.fill(
+                    (0, 0, 0, alpha),
+                    (sx, sy, SEG_SIZE, SEG_SIZE),
+                )
+
+        screen.blit(self._fog_surface, (0, 0))
 
     def _draw_hover(self, screen, cam_x, cam_y):
         if self.hover_seg is None:
@@ -388,16 +469,15 @@ class WorldScene(Scene):
         py = self.gy * SEG_SIZE - cam_y
         color = self.state.class_def.color if self.state.stamina > 0 else (100, 60, 60)
         pg.draw.rect(screen, color, (px, py, SEG_SIZE, SEG_SIZE))
+        pg.draw.rect(screen, (255, 255, 255), (px, py, SEG_SIZE, SEG_SIZE), 1)
 
     def _draw_hud(self, screen):
         s = self.state
         bar_w, bar_h = 220, 18
         x, y = 12, 12
-        # HP
         self._bar(screen, x, y, bar_w, bar_h, s.hp_ratio, (220, 60, 60))
         t = self._font_small.render(f"HP {s.hp}/{s.max_hp}", True, (255, 255, 255))
         screen.blit(t, (x + bar_w + 8, y + 2))
-        # Stamina
         y += bar_h + 4
         color = (220, 200, 60) if s.stamina_ratio > 0.3 else (220, 60, 60)
         self._bar(screen, x, y, bar_w, bar_h - 4, s.stamina_ratio, color)
@@ -405,7 +485,6 @@ class WorldScene(Scene):
             f"Силы {s.stamina}/{s.max_stamina}", True, (255, 255, 255)
         )
         screen.blit(t, (x + bar_w + 8, y))
-        # XP
         y += bar_h
         xp_r = s.xp / s.xp_to_next if s.xp_to_next else 0
         self._bar(screen, x, y, bar_w, bar_h - 4, xp_r, (90, 180, 230))
@@ -413,10 +492,14 @@ class WorldScene(Scene):
             f"Ур. {s.level}  {s.xp}/{s.xp_to_next}", True, (255, 255, 255)
         )
         screen.blit(t, (x + bar_w + 8, y))
-        # Gold
         y += bar_h
         t = self._font_small.render(f"Золото: {s.gold}", True, (240, 220, 100))
         screen.blit(t, (x, y))
+        y += 18
+        active = len(s.quest_log.active())
+        if active:
+            t = self._font_small.render(f"Квесты: {active}  [J]", True, (200, 220, 250))
+            screen.blit(t, (x, y))
 
     def _bar(self, screen, x, y, w, h, ratio, color):
         pg.draw.rect(screen, (30, 30, 30), (x, y, w, h))
@@ -425,13 +508,55 @@ class WorldScene(Scene):
             pg.draw.rect(screen, color, (x + 2, y + 2, fill, h - 4))
         pg.draw.rect(screen, (200, 200, 200), (x, y, w, h), 1)
 
+    def _draw_minimap(self, screen):
+        show_full = self.mode == "spawn"
+        if (
+            self._minimap_surf is None
+            or self._minimap_dirty
+            or self._minimap_full != show_full
+        ):
+            base = pg.Surface((self.world.width, self.world.height))
+            base.fill((10, 10, 15))
+            for gy in range(self.world.height):
+                for gx in range(self.world.width):
+                    seg = self.world.get(gx, gy)
+                    if seg is None:
+                        continue
+                    if show_full or seg.explored:
+                        base.set_at((gx, gy), seg.biome.color)
+            self._minimap_surf = base
+            self._minimap_dirty = False
+            self._minimap_full = show_full
+
+        scaled = pg.transform.scale(self._minimap_surf, (MINIMAP_W, MINIMAP_H))
+        mm_x = self.camera.view_w - MINIMAP_W - 10
+        mm_y = 10
+        screen.blit(scaled, (mm_x, mm_y))
+        pg.draw.rect(screen, (150, 150, 170), (mm_x, mm_y, MINIMAP_W, MINIMAP_H), 2)
+
+        # POI
+        for poi in self.world.pois:
+            if not self._is_poi_visible(poi):
+                continue
+            px = mm_x + int(poi.gx * MINIMAP_W / self.world.width)
+            py = mm_y + int(poi.gy * MINIMAP_H / self.world.height)
+            color = (100, 100, 100) if poi.cleared else poi.icon_color
+            pg.draw.circle(screen, color, (px, py), 3)
+            pg.draw.circle(screen, (20, 20, 20), (px, py), 3, 1)
+
+        # Игрок
+        px = mm_x + int(self.gx * MINIMAP_W / self.world.width)
+        py = mm_y + int(self.gy * MINIMAP_H / self.world.height)
+        pg.draw.circle(screen, (255, 60, 60), (px, py), 4)
+        pg.draw.circle(screen, (255, 255, 255), (px, py), 4, 1)
+
     def _draw_hint(self, screen):
         if self.mode == "spawn":
-            text = "ЛКМ / Enter — выбрать старт | WASD — панорама | I C K J — панели"
+            text = "ЛКМ / Enter — выбрать старт | WASD — панорама | I C K J"
         elif self.state.stamina > 0:
             text = "WASD — шаг | Enter — войти | I C K J — панели"
         else:
-            text = "Нет сил — Enter для отдыха | I C K J — панели"
+            text = "Нет сил идти — Enter для отдыха | I C K J"
         surf = self._font_hint.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)
