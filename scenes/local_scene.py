@@ -20,11 +20,30 @@ class LocalScene(Scene):
     def __init__(self, manager, segment):
         self.manager = manager
         self.segment = segment
-        self.map = segment.get_local_map()
+        self.map = None
         self.player = None
+        self.return_pos = None
+
+    def _get_neighbors(self):
+        """Биомы четырёх соседей текущего сегмента."""
+        world = getattr(self.manager, "world", None)
+        if world is None:
+            return None
+        gx, gy = self.segment.gx, self.segment.gy
+        result = {}
+        for name, (dx, dy) in (
+            ('n', (0, -1)), ('s', (0, 1)),
+            ('w', (-1, 0)), ('e', (1, 0)),
+        ):
+            seg = world.get(gx + dx, gy + dy)
+            result[name] = seg.biome if seg else None
+        return result
 
     def on_enter(self, return_pos=None, entry_from=None):
         self.return_pos = return_pos
+        neighbors = self._get_neighbors()
+        self.map = self.segment.get_local_map(neighbors=neighbors)
+
         cx = (self.map.width // 2) * TILE_SIZE
         cy = (self.map.height // 2) * TILE_SIZE
         self.player = Player(cx, cy, TILE_SIZE - 8, TILE_SIZE - 8,
@@ -38,8 +57,11 @@ class LocalScene(Scene):
     def handle_event(self, event):
         if event.type == pg.KEYDOWN and event.key == pg.K_ESCAPE:
             from scenes.world_scene import WorldScene
-            self.manager.switch(WorldScene(self.manager, self.manager.world),
-                                world_pos=self.return_pos, mode="play")
+            self.manager.switch(
+                WorldScene(self.manager, self.manager.world),
+                world_pos=self.return_pos,
+                mode="play",
+            )
 
     def update(self, dt):
         nearby = self.map.walls_near(
@@ -47,18 +69,13 @@ class LocalScene(Scene):
             self.player.y + self.player.rect_y / 2,
             radius_px=96,
         )
-        self.player.update(
-            dt,
-            walls=nearby,
-            map_w_px=self.map_w_px,
-            map_h_px=self.map_h_px,
-        )
+        self.player.update(dt, walls=nearby,
+                           map_w_px=self.map_w_px,
+                           map_h_px=self.map_h_px)
         self.camera.follow(self.player, self.map_w_px, self.map_h_px)
 
     def draw(self, screen):
         screen.fill((20, 20, 20))
-
-        # --- Отрисовка ТОЛЬКО видимых тайлов ---
         tx0, ty0, tx1, ty1 = self.camera.visible_tile_range(TILE_SIZE)
         tx1 = min(tx1, self.map.width)
         ty1 = min(ty1, self.map.height)
@@ -69,11 +86,9 @@ class LocalScene(Scene):
             sy = ty * TILE_SIZE - int(self.camera.y)
             for tx in range(tx0, tx1):
                 sx = tx * TILE_SIZE - int(self.camera.x)
-                color = COLORS[row[tx]]
-                # 250×250 = 62 500, но видимых ~1400 — разница в 40 раз
-                pg.draw.rect(screen, color, (sx, sy, TILE_SIZE, TILE_SIZE))
+                pg.draw.rect(screen, COLORS[row[tx]],
+                             (sx, sy, TILE_SIZE, TILE_SIZE))
 
-        # --- Игрок со сдвигом камеры ---
         px, py = self.camera.apply(self.player.x, self.player.y)
         pg.draw.rect(screen, self.player.texture,
                      (px, py, self.player.rect_x, self.player.rect_y))
