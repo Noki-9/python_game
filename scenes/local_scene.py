@@ -39,7 +39,7 @@ class LocalScene(Scene):
         if event.type == pg.KEYDOWN and event.key == pg.K_ESCAPE:
             from scenes.world_scene import WorldScene
             self.manager.switch(WorldScene(self.manager, self.manager.world),
-                                world_pos=self.return_pos)
+                                world_pos=self.return_pos, mode="play")
 
     def update(self, dt):
         nearby = self.map.walls_near(

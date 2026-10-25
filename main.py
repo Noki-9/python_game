@@ -13,7 +13,7 @@ def main():
     world = WorldMap(seed=randint(1000, 9999))
     manager.world = world
 
-    manager.switch(WorldScene(manager, world))
+    manager.switch(WorldScene(manager, world, mode="spawn"))
 
     running = True
     while running:
