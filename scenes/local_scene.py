@@ -36,6 +36,7 @@ COLORS = {
 
 PICKUP_RADIUS = 44
 NPC_INTERACT_RADIUS = 64
+MINIMAP_SIZE = 180
 
 
 class LocalScene(Scene):
@@ -52,6 +53,7 @@ class LocalScene(Scene):
         self.visual_effects = []  # [x, y, radius, color, t_left, t_max]
         self.return_pos = None
         self.notifications = []
+        self._minimap_cache = None
 
         self._font_hint = pg.font.SysFont(None, 22)
         self._font_label = pg.font.SysFont(None, 24)
@@ -59,6 +61,7 @@ class LocalScene(Scene):
         self._font_npc = pg.font.SysFont(None, 16)
         self._font_key = pg.font.SysFont(None, 20)
 
+    # ================= Жизненный цикл =================
     def _get_neighbors(self):
         world = getattr(self.manager, "world", None)
         if world is None:
@@ -81,6 +84,7 @@ class LocalScene(Scene):
         self.dropped_items = []
         self.projectiles = []
         self.visual_effects = []
+        self._minimap_cache = None
 
         state = self.manager.player_state
         state.restore()
@@ -135,6 +139,7 @@ class LocalScene(Scene):
             self.npcs = []
 
         self._sync_fetch_quests()
+        self._build_minimap()
 
         if self.segment.cleared:
             self.notifications.append(("Локация уже зачищена", 3.0))
@@ -142,7 +147,19 @@ class LocalScene(Scene):
     def on_exit(self):
         self.segment.reset_if_unfinished()
 
-    # ---------- Ввод ----------
+    # ================= Мини-карта: построение =================
+    def _build_minimap(self):
+        """1 раз при входе: 250×250 тайлов → 180×180. Дальше только blit."""
+        base = pg.Surface((self.map.width, self.map.height))
+        base.fill((10, 10, 15))
+        tiles = self.map.tiles
+        for ty in range(self.map.height):
+            row = tiles[ty]
+            for tx in range(self.map.width):
+                base.set_at((tx, ty), COLORS.get(row[tx], (255, 0, 255)))
+        self._minimap_cache = pg.transform.scale(base, (MINIMAP_SIZE, MINIMAP_SIZE))
+
+    # ================= Ввод =================
     def handle_event(self, event):
         if event.type == pg.KEYDOWN:
             if event.key == pg.K_ESCAPE:
@@ -202,7 +219,7 @@ class LocalScene(Scene):
         elif event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
             self._player_attack()
 
-    # ---------- Умения ----------
+    # ================= Умения =================
     def _cast_ability(self, key):
         s = self.manager.player_state
         ability = get_ability_for_key(s.class_id, key)
@@ -342,7 +359,7 @@ class LocalScene(Scene):
             ]
         )
 
-    # ---------- Атака ----------
+    # ================= Атака =================
     def _player_attack(self):
         targets = [e for e in self.enemies if e.is_alive()] + [
             a for a in self.animals if a.is_alive()
@@ -444,7 +461,7 @@ class LocalScene(Scene):
                 best_d = d
         return best
 
-    # ---------- Update ----------
+    # ================= Update =================
     def update(self, dt):
         if not self.player.is_alive():
             self._on_player_death()
@@ -480,14 +497,12 @@ class LocalScene(Scene):
             )
             a.update(dt, self.player, walls)
 
-        # Снаряды
         for p in self.projectiles:
             killed_list = p.update(dt, self.enemies, self.animals, self.map, TILE_SIZE)
             for target in killed_list:
                 self._on_enemy_killed(target)
         self.projectiles = [p for p in self.projectiles if p.alive]
 
-        # Визуальные эффекты
         for eff in self.visual_effects:
             eff[4] -= dt
         self.visual_effects = [e for e in self.visual_effects if e[4] > 0]
@@ -544,7 +559,7 @@ class LocalScene(Scene):
             mode="play",
         )
 
-    # ---------- Draw ----------
+    # ================= Draw =================
     def draw(self, screen):
         screen.fill((20, 20, 20))
 
@@ -594,9 +609,11 @@ class LocalScene(Scene):
         self._draw_hud(screen)
         self._draw_active_quests(screen)
         self._draw_ability_bar(screen)
+        self._draw_minimap(screen)
         self._draw_notifications(screen)
         self._draw_hint(screen)
 
+    # ---------- Отрисовка эффектов ----------
     def _draw_visual_effects(self, screen):
         for x, y, radius, color, t_left, t_max in self.visual_effects:
             sx, sy = self.camera.apply(x, y)
@@ -701,7 +718,6 @@ class LocalScene(Scene):
         x_start = (screen.get_width() - total) // 2
         y = screen.get_height() - slot - 70
 
-        # Полоска маны
         mb_h = 8
         mb_y = y - 16
         pg.draw.rect(screen, (30, 30, 40), (x_start, mb_y, total, mb_h))
@@ -721,19 +737,15 @@ class LocalScene(Scene):
             pg.draw.rect(screen, bg, rect)
             pg.draw.rect(screen, border, rect, 2)
 
-            # Иконка
             pg.draw.circle(screen, ab.color, (rect.centerx, rect.centery), 18)
             pg.draw.circle(screen, (30, 30, 30), (rect.centerx, rect.centery), 18, 1)
 
-            # Клавиша
             k = self._font_key.render(ab.key, True, (255, 255, 255))
             screen.blit(k, (rect.x + 4, rect.y + 1))
 
-            # Стоимость маны
             m = self._font_hud.render(str(ab.mana_cost), True, (120, 200, 250))
             screen.blit(m, (rect.right - m.get_width() - 4, rect.y + 2))
 
-            # Кулдаун
             if cd < 1.0:
                 cd_h = int(slot * (1 - cd))
                 ov = pg.Surface((slot, cd_h))
@@ -741,12 +753,74 @@ class LocalScene(Scene):
                 ov.fill((0, 0, 0))
                 screen.blit(ov, (sx, y + slot - cd_h))
 
-            # Не хватает маны — красный оттенок
             if s.mana < ab.mana_cost:
                 tint = pg.Surface((slot, slot))
                 tint.set_alpha(70)
                 tint.fill((200, 40, 40))
                 screen.blit(tint, (sx, y))
+
+    # ---------- Мини-карта ----------
+    def _draw_minimap(self, screen):
+        if self._minimap_cache is None:
+            return
+
+        sw, _ = screen.get_size()
+        mm_x = sw - MINIMAP_SIZE - 10
+        mm_y = 10
+
+        screen.blit(self._minimap_cache, (mm_x, mm_y))
+        pg.draw.rect(
+            screen, (150, 150, 170), (mm_x, mm_y, MINIMAP_SIZE, MINIMAP_SIZE), 2
+        )
+
+        scale_x = MINIMAP_SIZE / self.map_w_px
+        scale_y = MINIMAP_SIZE / self.map_h_px
+
+        # Квест-алтарь
+        if self.segment.location_type.is_quest:
+            cx = (self.map.width // 2) * TILE_SIZE
+            cy = (self.map.height // 2) * TILE_SIZE
+            qx = mm_x + int(cx * scale_x)
+            qy = mm_y + int(cy * scale_y)
+            color = (100, 100, 100) if self.segment.cleared else (230, 200, 80)
+            pg.draw.circle(screen, color, (qx, qy), 4)
+            pg.draw.circle(screen, (20, 20, 20), (qx, qy), 4, 1)
+
+        # Животные
+        for a in self.animals:
+            if not a.is_alive():
+                continue
+            ax = mm_x + int((a.x + a.rect_x / 2) * scale_x)
+            ay = mm_y + int((a.y + a.rect_y / 2) * scale_y)
+            pg.draw.circle(screen, (240, 200, 80), (ax, ay), 2)
+
+        # Враги
+        for e in self.enemies:
+            if not e.is_alive():
+                continue
+            ex = mm_x + int((e.x + e.rect_x / 2) * scale_x)
+            ey = mm_y + int((e.y + e.rect_y / 2) * scale_y)
+            pg.draw.circle(screen, (220, 60, 60), (ex, ey), 2)
+
+        # NPC
+        for npc in self.npcs:
+            nx = mm_x + int((npc.x + npc.rect_x / 2) * scale_x)
+            ny = mm_y + int((npc.y + npc.rect_y / 2) * scale_y)
+            pg.draw.circle(screen, npc.texture, (nx, ny), 3)
+            pg.draw.circle(screen, (20, 20, 20), (nx, ny), 3, 1)
+
+        # Вьюпорт камеры
+        vp_x = mm_x + int(self.camera.x * scale_x)
+        vp_y = mm_y + int(self.camera.y * scale_y)
+        vp_w = max(2, int(self.camera.view_w * scale_x))
+        vp_h = max(2, int(self.camera.view_h * scale_y))
+        pg.draw.rect(screen, (255, 255, 255), (vp_x, vp_y, vp_w, vp_h), 1)
+
+        # Игрок
+        px = mm_x + int((self.player.x + self.player.rect_x / 2) * scale_x)
+        py = mm_y + int((self.player.y + self.player.rect_y / 2) * scale_y)
+        pg.draw.circle(screen, (100, 180, 255), (px, py), 3)
+        pg.draw.circle(screen, (255, 255, 255), (px, py), 3, 1)
 
     def _draw_notifications(self, screen):
         y = screen.get_height() - 220
