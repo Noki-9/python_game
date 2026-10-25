@@ -3,10 +3,12 @@ import random
 
 import pygame as pg
 
+from core.abilities import get_abilities_for_class, get_ability_for_key
 from core.camera import Camera
 from core.config import TILE_SIZE, screen
 from core.scene_manager import Scene
 from models.player import Player
+from models.projectile import Projectile
 from ui.character_ui import CharacterUI
 from ui.dialogue_ui import DialogueUI
 from ui.inventory_ui import InventoryUI
@@ -46,6 +48,8 @@ class LocalScene(Scene):
         self.animals = []
         self.npcs = []
         self.dropped_items = []
+        self.projectiles = []
+        self.visual_effects = []  # [x, y, radius, color, t_left, t_max]
         self.return_pos = None
         self.notifications = []
 
@@ -53,6 +57,7 @@ class LocalScene(Scene):
         self._font_label = pg.font.SysFont(None, 24)
         self._font_hud = pg.font.SysFont(None, 18)
         self._font_npc = pg.font.SysFont(None, 16)
+        self._font_key = pg.font.SysFont(None, 20)
 
     def _get_neighbors(self):
         world = getattr(self.manager, "world", None)
@@ -74,6 +79,8 @@ class LocalScene(Scene):
         self.return_pos = return_pos
         self.notifications = []
         self.dropped_items = []
+        self.projectiles = []
+        self.visual_effects = []
 
         state = self.manager.player_state
         state.restore()
@@ -127,7 +134,6 @@ class LocalScene(Scene):
         else:
             self.npcs = []
 
-        # синхронизация FETCH-квестов
         self._sync_fetch_quests()
 
         if self.segment.cleared:
@@ -168,6 +174,15 @@ class LocalScene(Scene):
                     QuestLogUI(screen.get_size(), self.manager.player_state)
                 )
                 return
+            if event.key == pg.K_q:
+                self._cast_ability("Q")
+                return
+            if event.key == pg.K_f:
+                self._cast_ability("F")
+                return
+            if event.key == pg.K_r:
+                self._cast_ability("R")
+                return
             if event.key == pg.K_e:
                 npc = self._find_npc_near()
                 if npc is not None:
@@ -187,33 +202,147 @@ class LocalScene(Scene):
         elif event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
             self._player_attack()
 
-    def _find_npc_near(self):
-        px = self.player.x + self.player.rect_x / 2
-        py = self.player.y + self.player.rect_y / 2
+    # ---------- Умения ----------
+    def _cast_ability(self, key):
+        s = self.manager.player_state
+        ability = get_ability_for_key(s.class_id, key)
+        if ability is None:
+            return
+        if s.ability_cooldowns.get(ability.ability_id, 0) > 0:
+            return
+        if s.mana < ability.mana_cost:
+            self.notifications.append(("Не хватает маны", 1.0))
+            return
+        if not s.try_spend_ability(ability):
+            return
+
+        if ability.is_projectile:
+            self._cast_projectile(ability)
+        elif ability.is_aoe_at_cursor:
+            self._cast_aoe_at_cursor(ability)
+        elif ability.is_aoe_self:
+            self._cast_aoe_self(ability)
+        elif ability.is_single_target:
+            self._cast_single_target(ability)
+
+    def _cast_projectile(self, ability):
+        mx, my = pg.mouse.get_pos()
+        wx = mx + self.camera.x
+        wy = my + self.camera.y
+        pcx = self.player.x + self.player.rect_x / 2
+        pcy = self.player.y + self.player.rect_y / 2
+        base_angle = math.atan2(wy - pcy, wx - pcx)
+
+        count = ability.projectile_count
+        spread_rad = math.radians(ability.projectile_spread)
+        damage = int(self.manager.player_state.attack_damage * ability.damage_mult)
+        lifetime = ability.range / ability.projectile_speed
+
+        for i in range(count):
+            if count > 1:
+                offset = -spread_rad / 2 + (spread_rad / (count - 1)) * i
+            else:
+                offset = 0.0
+            angle = base_angle + offset
+            vx = math.cos(angle) * ability.projectile_speed
+            vy = math.sin(angle) * ability.projectile_speed
+            self.projectiles.append(
+                Projectile(
+                    x=pcx,
+                    y=pcy,
+                    vx=vx,
+                    vy=vy,
+                    damage=damage,
+                    radius=6,
+                    color=ability.color,
+                    lifetime=lifetime,
+                    aoe_radius=ability.aoe_radius,
+                )
+            )
+
+    def _cast_aoe_at_cursor(self, ability):
+        mx, my = pg.mouse.get_pos()
+        wx = mx + self.camera.x
+        wy = my + self.camera.y
+        pcx = self.player.x + self.player.rect_x / 2
+        pcy = self.player.y + self.player.rect_y / 2
+
+        dist = math.hypot(wx - pcx, wy - pcy)
+        if dist > ability.range:
+            wx = pcx + (wx - pcx) / dist * ability.range
+            wy = pcy + (wy - pcy) / dist * ability.range
+
+        radius = ability.aoe_radius
+        damage = int(self.manager.player_state.attack_damage * ability.damage_mult)
+
+        for target_list in (self.enemies, self.animals):
+            for t in target_list:
+                if not t.is_alive():
+                    continue
+                ex = t.x + t.rect_x / 2
+                ey = t.y + t.rect_y / 2
+                if math.hypot(ex - wx, ey - wy) <= radius:
+                    if t.take_damage(damage):
+                        self._on_enemy_killed(t)
+
+        self.visual_effects.append([wx, wy, radius, ability.color, 0.5, 0.5])
+
+    def _cast_aoe_self(self, ability):
+        pcx = self.player.x + self.player.rect_x / 2
+        pcy = self.player.y + self.player.rect_y / 2
+        radius = ability.aoe_radius
+        damage = int(self.manager.player_state.attack_damage * ability.damage_mult)
+
+        for target_list in (self.enemies, self.animals):
+            for t in target_list:
+                if not t.is_alive():
+                    continue
+                ex = t.x + t.rect_x / 2
+                ey = t.y + t.rect_y / 2
+                if math.hypot(ex - pcx, ey - pcy) <= radius:
+                    if t.take_damage(damage):
+                        self._on_enemy_killed(t)
+
+        if ability.heal > 0:
+            self.manager.player_state.heal(ability.heal)
+            self.notifications.append((f"+{ability.heal} HP", 1.0))
+
+        self.visual_effects.append([pcx, pcy, radius, ability.color, 0.35, 0.35])
+
+    def _cast_single_target(self, ability):
+        pcx = self.player.x + self.player.rect_x / 2
+        pcy = self.player.y + self.player.rect_y / 2
         best = None
-        best_d = NPC_INTERACT_RADIUS
-        for npc in self.npcs:
-            nx = npc.x + npc.rect_x / 2
-            ny = npc.y + npc.rect_y / 2
-            d = math.hypot(nx - px, ny - py)
-            if d < best_d:
-                best = npc
+        best_d = float(ability.range)
+        for e in self.enemies:
+            if not e.is_alive():
+                continue
+            ex = e.x + e.rect_x / 2
+            ey = e.y + e.rect_y / 2
+            d = math.hypot(ex - pcx, ey - pcy)
+            if d <= best_d:
+                best = e
                 best_d = d
-        return best
-
-    def _try_interact(self):
-        if not self.segment.location_type.is_quest:
+        if best is None:
+            self.notifications.append(("Нет цели", 1.0))
             return
-        if self.segment.cleared:
-            return
-        cx = (self.map.width // 2) * TILE_SIZE
-        cy = (self.map.height // 2) * TILE_SIZE
-        px = self.player.x + self.player.rect_x / 2
-        py = self.player.y + self.player.rect_y / 2
-        dist2 = (px - cx) ** 2 + (py - cy) ** 2
-        if dist2 < (TILE_SIZE * 3) ** 2:
-            self._complete_quest()
 
+        damage = int(self.manager.player_state.attack_damage * ability.damage_mult)
+        if best.take_damage(damage):
+            self._on_enemy_killed(best)
+
+        self.visual_effects.append(
+            [
+                best.x + best.rect_x / 2,
+                best.y + best.rect_y / 2,
+                30,
+                ability.color,
+                0.25,
+                0.25,
+            ]
+        )
+
+    # ---------- Атака ----------
     def _player_attack(self):
         targets = [e for e in self.enemies if e.is_alive()] + [
             a for a in self.animals if a.is_alive()
@@ -245,10 +374,8 @@ class LocalScene(Scene):
         state.add_xp(enemy.xp_reward)
         self.notifications.append((f"+{enemy.xp_reward} XP", 1.5))
 
-        # квесты по убийству
         finished = state.quest_log.notify_kill(enemy.enemy_id)
         self._on_quests_completed(finished)
-
         self._check_quest_completion()
 
     def _on_quests_completed(self, finished):
@@ -285,22 +412,47 @@ class LocalScene(Scene):
         self.segment.cleared = True
         if self.segment.poi:
             self.segment.poi.cleared = True
-
         state = self.manager.player_state
         state.add_gold(100)
         state.add_xp(250)
         self.notifications.append(("Локация зачищена! +100 золота, +250 XP", 4.0))
-
-        # CLEAR-квесты
         if self.segment.poi:
             finished = state.quest_log.notify_location_cleared(self.segment.poi.name)
             self._on_quests_completed(finished)
+
+    def _try_interact(self):
+        if not self.segment.location_type.is_quest:
+            return
+        if self.segment.cleared:
+            return
+        cx = (self.map.width // 2) * TILE_SIZE
+        cy = (self.map.height // 2) * TILE_SIZE
+        px = self.player.x + self.player.rect_x / 2
+        py = self.player.y + self.player.rect_y / 2
+        if (px - cx) ** 2 + (py - cy) ** 2 < (TILE_SIZE * 3) ** 2:
+            self._complete_quest()
+
+    def _find_npc_near(self):
+        px = self.player.x + self.player.rect_x / 2
+        py = self.player.y + self.player.rect_y / 2
+        best = None
+        best_d = NPC_INTERACT_RADIUS
+        for npc in self.npcs:
+            d = math.hypot(npc.x + npc.rect_x / 2 - px, npc.y + npc.rect_y / 2 - py)
+            if d < best_d:
+                best = npc
+                best_d = d
+        return best
 
     # ---------- Update ----------
     def update(self, dt):
         if not self.player.is_alive():
             self._on_player_death()
             return
+
+        state = self.manager.player_state
+        state.tick_ability_cooldowns(dt)
+        state.regen_mana(dt)
 
         nearby = self.map.walls_near(
             self.player.x + self.player.rect_x / 2,
@@ -327,6 +479,18 @@ class LocalScene(Scene):
                 a.x + a.rect_x / 2, a.y + a.rect_y / 2, radius_px=64
             )
             a.update(dt, self.player, walls)
+
+        # Снаряды
+        for p in self.projectiles:
+            killed_list = p.update(dt, self.enemies, self.animals, self.map, TILE_SIZE)
+            for target in killed_list:
+                self._on_enemy_killed(target)
+        self.projectiles = [p for p in self.projectiles if p.alive]
+
+        # Визуальные эффекты
+        for eff in self.visual_effects:
+            eff[4] -= dt
+        self.visual_effects = [e for e in self.visual_effects if e[4] > 0]
 
         self._collect_drops()
 
@@ -362,7 +526,6 @@ class LocalScene(Scene):
             else:
                 remaining.append((item, x, y))
         self.dropped_items = remaining
-
         if had_fetch:
             self._sync_fetch_quests()
 
@@ -371,7 +534,8 @@ class LocalScene(Scene):
         lost = state.gold // 5
         state.gold -= lost
         state.hp = state.max_hp
-        state.restore()
+        state.stamina = state.max_stamina
+        state.mana = float(state.max_mana)
         from scenes.world_scene import WorldScene
 
         self.manager.switch(
@@ -387,7 +551,6 @@ class LocalScene(Scene):
         tx0, ty0, tx1, ty1 = self.camera.visible_tile_range(TILE_SIZE)
         tx1 = min(tx1, self.map.width)
         ty1 = min(ty1, self.map.height)
-
         tiles = self.map.tiles
         for ty in range(ty0, ty1):
             row = tiles[ty]
@@ -415,6 +578,11 @@ class LocalScene(Scene):
             pg.draw.circle(screen, color, (sx, sy), 5)
             pg.draw.circle(screen, (20, 20, 20), (sx, sy), 5, 1)
 
+        for p in self.projectiles:
+            p.draw(screen, self.camera)
+
+        self._draw_visual_effects(screen)
+
         px, py = self.camera.apply(self.player.x, self.player.y)
         pg.draw.rect(
             screen,
@@ -425,8 +593,20 @@ class LocalScene(Scene):
         self._draw_label(screen)
         self._draw_hud(screen)
         self._draw_active_quests(screen)
+        self._draw_ability_bar(screen)
         self._draw_notifications(screen)
         self._draw_hint(screen)
+
+    def _draw_visual_effects(self, screen):
+        for x, y, radius, color, t_left, t_max in self.visual_effects:
+            sx, sy = self.camera.apply(x, y)
+            alpha = int(255 * (t_left / t_max))
+            surf = pg.Surface((radius * 2 + 4, radius * 2 + 4), pg.SRCALPHA)
+            c = (color[0], color[1], color[2], max(0, alpha // 2))
+            pg.draw.circle(surf, c, (radius + 2, radius + 2), radius)
+            c2 = (color[0], color[1], color[2], max(0, alpha))
+            pg.draw.circle(surf, c2, (radius + 2, radius + 2), radius, 2)
+            screen.blit(surf, (sx - radius - 2, sy - radius - 2))
 
     def _draw_quest_marker(self, screen):
         if not self.segment.location_type.is_quest:
@@ -458,6 +638,13 @@ class LocalScene(Scene):
         screen.blit(surf, (216, y - 1))
 
         y += 20
+        self._bar(screen, 10, y, 200, 12, s.mana_ratio, (80, 160, 240))
+        surf = self._font_hud.render(
+            f"MP: {int(s.mana)}/{s.max_mana}", True, (255, 255, 255)
+        )
+        screen.blit(surf, (216, y - 1))
+
+        y += 18
         xp_r = s.xp / s.xp_to_next if s.xp_to_next else 0
         self._bar(screen, 10, y, 200, 14, xp_r, (90, 180, 230))
         surf = self._font_hud.render(
@@ -483,15 +670,14 @@ class LocalScene(Scene):
         if not quests:
             return
         x = 10
-        y = 130
+        y = 200
         title = self._font_hud.render(
             f"Активные квесты ({len(quests)})  [J]", True, (240, 220, 100)
         )
         screen.blit(title, (x, y))
         y += 20
         for q in quests[:3]:
-            obj = q.objective
-            text = f"• {q.title}: {obj.progress_str}"
+            text = f"• {q.title}: {q.objective.progress_str}"
             surf = self._font_hud.render(text, True, (220, 220, 200))
             screen.blit(surf, (x + 4, y))
             y += 18
@@ -503,8 +689,67 @@ class LocalScene(Scene):
             pg.draw.rect(screen, color, (x + 2, y + 2, fill, h - 4))
         pg.draw.rect(screen, (200, 200, 200), (x, y, w, h), 1)
 
+    def _draw_ability_bar(self, screen):
+        s = self.manager.player_state
+        abilities = get_abilities_for_class(s.class_id)
+        if not abilities:
+            return
+
+        slot = 56
+        gap = 8
+        total = len(abilities) * slot + (len(abilities) - 1) * gap
+        x_start = (screen.get_width() - total) // 2
+        y = screen.get_height() - slot - 70
+
+        # Полоска маны
+        mb_h = 8
+        mb_y = y - 16
+        pg.draw.rect(screen, (30, 30, 40), (x_start, mb_y, total, mb_h))
+        fw = int((total - 2) * s.mana_ratio)
+        if fw > 0:
+            pg.draw.rect(screen, (80, 160, 240), (x_start + 1, mb_y + 1, fw, mb_h - 2))
+        pg.draw.rect(screen, (100, 100, 120), (x_start, mb_y, total, mb_h), 1)
+
+        for i, ab in enumerate(abilities):
+            sx = x_start + i * (slot + gap)
+            rect = pg.Rect(sx, y, slot, slot)
+            cd = s.get_cooldown_ratio(ab)
+            ready = cd >= 1.0 and s.mana >= ab.mana_cost
+
+            bg = (50, 60, 70) if ready else (30, 30, 40)
+            border = ab.color if ready else (80, 80, 90)
+            pg.draw.rect(screen, bg, rect)
+            pg.draw.rect(screen, border, rect, 2)
+
+            # Иконка
+            pg.draw.circle(screen, ab.color, (rect.centerx, rect.centery), 18)
+            pg.draw.circle(screen, (30, 30, 30), (rect.centerx, rect.centery), 18, 1)
+
+            # Клавиша
+            k = self._font_key.render(ab.key, True, (255, 255, 255))
+            screen.blit(k, (rect.x + 4, rect.y + 1))
+
+            # Стоимость маны
+            m = self._font_hud.render(str(ab.mana_cost), True, (120, 200, 250))
+            screen.blit(m, (rect.right - m.get_width() - 4, rect.y + 2))
+
+            # Кулдаун
+            if cd < 1.0:
+                cd_h = int(slot * (1 - cd))
+                ov = pg.Surface((slot, cd_h))
+                ov.set_alpha(180)
+                ov.fill((0, 0, 0))
+                screen.blit(ov, (sx, y + slot - cd_h))
+
+            # Не хватает маны — красный оттенок
+            if s.mana < ab.mana_cost:
+                tint = pg.Surface((slot, slot))
+                tint.set_alpha(70)
+                tint.fill((200, 40, 40))
+                screen.blit(tint, (sx, y))
+
     def _draw_notifications(self, screen):
-        y = screen.get_height() - 180
+        y = screen.get_height() - 220
         for txt, t in self.notifications:
             alpha = 255 if t >= 1.0 else int(255 * t)
             surf = self._font_hint.render(txt, True, (255, 240, 100))
@@ -515,11 +760,11 @@ class LocalScene(Scene):
     def _draw_hint(self, screen):
         npc = self._find_npc_near() if self.npcs else None
         if npc:
-            text = f"E — поговорить с {npc.name} | ЛКМ — атака | I C K J | Esc"
+            text = f"E — поговорить с {npc.name} | Q F R — умения | I C K J | Esc"
         elif self.segment.location_type.is_quest and not self.segment.cleared:
-            text = "WASD | ЛКМ — атака | E — взаимодействие | I C K J | Esc"
+            text = "WASD | ЛКМ — атака | Q F R — умения | E — взаимодействие | Esc"
         else:
-            text = "WASD | ЛКМ — атака | I C K J | Esc"
+            text = "WASD | ЛКМ — атака | Q F R — умения | I C K J | Esc"
         surf = self._font_hint.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)

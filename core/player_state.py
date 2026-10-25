@@ -38,6 +38,12 @@ class PlayerState:
 
         self.quest_log = QuestLog()
 
+        # --- Мана и умения ---
+        self.max_mana = self.class_def.max_mana
+        self.mana_regen = self.class_def.mana_regen
+        self.mana = float(self.max_mana)
+        self.ability_cooldowns: dict[str, float] = {}
+
         from world.item_generator import starting_equipment
 
         for item in starting_equipment(class_id):
@@ -46,7 +52,7 @@ class PlayerState:
 
         self.hp = self.max_hp
 
-    # ========== Derived ==========
+    # ---------- Derived ----------
     @property
     def bonus_stats(self):
         s = {
@@ -151,7 +157,11 @@ class PlayerState:
     def hp_ratio(self):
         return self.hp / self.max_hp if self.max_hp else 0.0
 
-    # ========== Выносливость ==========
+    @property
+    def mana_ratio(self):
+        return self.mana / self.max_mana if self.max_mana else 0.0
+
+    # ---------- Выносливость ----------
     def can_move(self, cost=1):
         return self.stamina >= cost
 
@@ -164,7 +174,7 @@ class PlayerState:
     def restore(self):
         self.stamina = self.max_stamina
 
-    # ========== HP ==========
+    # ---------- HP / Мана ----------
     def heal(self, amount):
         self.hp = min(self.max_hp, self.hp + amount)
 
@@ -173,7 +183,32 @@ class PlayerState:
         self.hp = max(0, self.hp - reduced)
         return self.hp <= 0
 
-    # ========== Прогресс ==========
+    def regen_mana(self, dt):
+        self.mana = min(float(self.max_mana), self.mana + self.mana_regen * dt)
+
+    # ---------- Умения ----------
+    def try_spend_ability(self, ability) -> bool:
+        if self.ability_cooldowns.get(ability.ability_id, 0.0) > 0:
+            return False
+        if self.mana < ability.mana_cost:
+            return False
+        self.mana -= ability.mana_cost
+        self.ability_cooldowns[ability.ability_id] = ability.cooldown
+        return True
+
+    def tick_ability_cooldowns(self, dt):
+        for k in list(self.ability_cooldowns.keys()):
+            if self.ability_cooldowns[k] > 0:
+                self.ability_cooldowns[k] = max(0.0, self.ability_cooldowns[k] - dt)
+
+    def get_cooldown_ratio(self, ability) -> float:
+        """1.0 = готово, 0.0 = только что использовано."""
+        cd = self.ability_cooldowns.get(ability.ability_id, 0.0)
+        if cd <= 0:
+            return 1.0
+        return 1.0 - cd / ability.cooldown
+
+    # ---------- Прогресс ----------
     def add_gold(self, amount):
         self.gold += max(0, amount)
 
@@ -206,7 +241,7 @@ class PlayerState:
         self.stat_points -= 1
         return True
 
-    # ========== Навыки ==========
+    # ---------- Навыки ----------
     def can_unlock_skill(self, node):
         if node.skill_id in self.unlocked_skills:
             return False
@@ -226,7 +261,7 @@ class PlayerState:
         self.skill_points -= node.cost
         return True
 
-    # ========== Инвентарь ==========
+    # ---------- Инвентарь ----------
     def add_item(self, item: Item):
         if item.is_stackable:
             for existing in self.inventory:
@@ -255,7 +290,7 @@ class PlayerState:
         self.inventory.append(item)
         return True
 
-    # ========== Квесты ==========
+    # ---------- Квесты ----------
     def grant_quest_reward(self, quest):
         self.add_gold(quest.reward_gold)
         self.add_xp(quest.reward_xp)

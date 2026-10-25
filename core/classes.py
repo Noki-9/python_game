@@ -15,6 +15,8 @@ class ClassDef:
     attack_range: int
     attack_cooldown: float
     color: tuple
+    max_mana: int
+    mana_regen: float
 
 
 CLASSES = {
@@ -31,6 +33,8 @@ CLASSES = {
         attack_range=48,
         attack_cooldown=0.5,
         color=(200, 60, 60),
+        max_mana=60,
+        mana_regen=4.0,
     ),
     "rogue": ClassDef(
         "rogue",
@@ -45,6 +49,8 @@ CLASSES = {
         attack_range=48,
         attack_cooldown=0.35,
         color=(160, 80, 200),
+        max_mana=80,
+        mana_regen=5.0,
     ),
     "mage": ClassDef(
         "mage",
@@ -59,6 +65,8 @@ CLASSES = {
         attack_range=250,
         attack_cooldown=0.9,
         color=(80, 120, 240),
+        max_mana=150,
+        mana_regen=10.0,
     ),
     "archer": ClassDef(
         "archer",
@@ -73,5 +81,7 @@ CLASSES = {
         attack_range=300,
         attack_cooldown=0.7,
         color=(80, 200, 100),
+        max_mana=100,
+        mana_regen=6.0,
     ),
 }

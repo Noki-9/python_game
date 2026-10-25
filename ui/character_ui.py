@@ -48,6 +48,7 @@ class CharacterUI(UIOverlay):
             f"Класс: {s.class_def.name}",
             f"Уровень: {s.level}  ({s.xp}/{s.xp_to_next} XP)",
             f"HP: {s.hp}/{s.max_hp}",
+            f"Мана: {int(s.mana)}/{s.max_mana}  (+{s.mana_regen:.1f}/сек)",
             f"Атака: {s.attack_damage}",
             f"Крит: {s.crit_chance * 100:.1f}%  x{s.crit_multiplier:.2f}",
             f"Защита: {s.defense}",
