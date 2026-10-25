@@ -12,6 +12,7 @@ from core.config import (
     screen,
 )
 from core.scene_manager import Scene
+from core.utils import direction_name
 from ui.character_ui import CharacterUI
 from ui.inventory_ui import InventoryUI
 from ui.quest_log_ui import QuestLogUI
@@ -73,7 +74,6 @@ class WorldScene(Scene):
         self._font_hint = pg.font.SysFont(None, 22)
         self._font_small = pg.font.SysFont(None, 16)
 
-        # Кэши
         self._fog_surface = None
         self._minimap_surf = None
         self._minimap_dirty = True
@@ -97,7 +97,7 @@ class WorldScene(Scene):
     def gy(self, v):
         self.state.gy = v
 
-    # ---------------- Пре-рендер ----------------
+    # ================= Пре-рендер =================
     def _ensure_prerender(self):
         if getattr(self.world, "_prerender", None) is None:
             self._prerender_map()
@@ -171,34 +171,26 @@ class WorldScene(Scene):
                     (sx + SEG_SIZE - thickness, sy + i * 2, thickness, 2),
                 )
 
-    # ---------------- Туман войны ----------------
+    # ================= Туман =================
     def _segment_visibility(self, gx, gy) -> float:
-        """0.0 = чёрный, 1.0 = полностью виден."""
         seg = self.world.get(gx, gy)
         if seg is None:
             return 0.0
-
-        dx = gx - self.gx
-        dy = gy - self.gy
+        dx, dy = gx - self.gx, gy - self.gy
         d2 = dx * dx + dy * dy
-
         if d2 <= VISION_NEAR_SQ:
             return 1.0
-
         if d2 >= VISION_FAR_SQ:
             return MEMORY_VISIBILITY if seg.explored else 0.0
-
         d = math.sqrt(d2)
         t = (d - VISION_NEAR) / (VISION_FAR - VISION_NEAR)
-        t = t * t * (3.0 - 2.0 * t)  # smoothstep
+        t = t * t * (3.0 - 2.0 * t)
         current = 1.0 - t
-
         if seg.explored:
             return MEMORY_VISIBILITY + current * (1.0 - MEMORY_VISIBILITY)
         return current
 
     def _reveal_around_player(self):
-        """Размечает FAR-радиус как explored; при новых — флаг для мини-карты."""
         r = VISION_FAR
         r2 = VISION_FAR_SQ
         new_reveal = False
@@ -213,7 +205,7 @@ class WorldScene(Scene):
         if new_reveal:
             self._minimap_dirty = True
 
-    # ---------------- Жизненный цикл ----------------
+    # ================= Жизненный цикл =================
     def on_enter(self, world_pos=None, mode=None):
         if mode is not None:
             self.mode = mode
@@ -239,7 +231,7 @@ class WorldScene(Scene):
             0, min(cy - self.camera.view_h / 2, self.map_h_px - self.camera.view_h)
         )
 
-    # ---------------- Ввод ----------------
+    # ================= Ввод =================
     def handle_event(self, event):
         if event.type == pg.KEYDOWN:
             if event.key == pg.K_i:
@@ -267,6 +259,9 @@ class WorldScene(Scene):
             self._try_pick_segment(pg.mouse.get_pos())
 
     def _handle_play_input(self, event):
+        if event.type == pg.MOUSEBUTTONDOWN and event.button == 3:
+            self._handle_waypoint_click(event.pos)
+            return
         if event.type != pg.KEYDOWN:
             return
         dx = dy = 0
@@ -288,6 +283,23 @@ class WorldScene(Scene):
                 self.manager.switch(
                     LocalScene(self.manager, seg), return_pos=(self.gx, self.gy)
                 )
+
+    def _handle_waypoint_click(self, screen_pos):
+        gx, gy = self._screen_to_segment_any(screen_pos)
+        if gx is None:
+            return
+        if self.state.waypoint == (gx, gy):
+            self.state.waypoint = None
+        else:
+            self.state.waypoint = (gx, gy)
+
+    def _screen_to_segment_any(self, screen_pos):
+        sx, sy = screen_pos
+        gx = int((sx + self.camera.x) // SEG_SIZE)
+        gy = int((sy + self.camera.y) // SEG_SIZE)
+        if not (0 <= gx < self.world.width and 0 <= gy < self.world.height):
+            return None, None
+        return gx, gy
 
     def _try_step(self, dx, dy):
         if not self._can_move(dx, dy):
@@ -329,7 +341,7 @@ class WorldScene(Scene):
             return 999
         return BIOME_MOVE_COST.get(seg.biome, DEFAULT_MOVE_COST)
 
-    # ---------------- Update ----------------
+    # ================= Update =================
     def update(self, dt):
         if self.mode == "play":
             self._reveal_around_player()
@@ -366,31 +378,30 @@ class WorldScene(Scene):
         self.hover_seg = (gx, gy) if gx is not None else None
         self.hover_valid = gx is not None
 
-    # ---------------- Draw ----------------
+    # ================= Draw =================
     def draw(self, screen):
         screen.fill((15, 15, 25))
         cam_x, cam_y = int(self.camera.x), int(self.camera.y)
 
-        # 1. Террейн (пре-рендер)
         screen.blit(
             self.world._prerender,
             (0, 0),
             (cam_x, cam_y, self.camera.view_w, self.camera.view_h),
         )
 
-        # 2. POI — до тумана, чтобы он их тоже затемнял
         self._draw_pois(screen, cam_x, cam_y)
-
-        # 3. Туман (градиент поверх террейна и POI)
         self._draw_fog(screen, cam_x, cam_y)
 
-        # 4. Игрок / hover — над туманом
+        # Маркеры — над туманом (мета-информация)
+        if self.mode == "play":
+            self._draw_quest_targets(screen, cam_x, cam_y)
+            self._draw_waypoint(screen, cam_x, cam_y)
+
         if self.mode == "spawn":
             self._draw_hover(screen, cam_x, cam_y)
         else:
             self._draw_player(screen, cam_x, cam_y)
 
-        # 5. HUD + мини-карта
         self._draw_hud(screen)
         self._draw_minimap(screen)
         self._draw_hint(screen)
@@ -422,7 +433,6 @@ class WorldScene(Scene):
     def _draw_fog(self, screen, cam_x, cam_y):
         if self.mode == "spawn":
             return
-
         vw, vh = self.camera.view_w, self.camera.view_h
         if self._fog_surface is None or self._fog_surface.get_size() != (vw, vh):
             self._fog_surface = pg.Surface((vw, vh), pg.SRCALPHA)
@@ -443,12 +453,43 @@ class WorldScene(Scene):
                     continue
                 sx = gx * SEG_SIZE - cam_x
                 sy = gy * SEG_SIZE - cam_y
-                self._fog_surface.fill(
-                    (0, 0, 0, alpha),
-                    (sx, sy, SEG_SIZE, SEG_SIZE),
-                )
-
+                self._fog_surface.fill((0, 0, 0, alpha), (sx, sy, SEG_SIZE, SEG_SIZE))
         screen.blit(self._fog_surface, (0, 0))
+
+    def _draw_quest_targets(self, screen, cam_x, cam_y):
+        t = pg.time.get_ticks() / 1000.0
+        pulse = 1.0 + 0.3 * math.sin(t * 4)
+        for q in self.state.quest_log.active():
+            if q.target_gx is None or q.target_gy is None:
+                continue
+            sx = q.target_gx * SEG_SIZE - cam_x + SEG_SIZE // 2
+            sy = q.target_gy * SEG_SIZE - cam_y + SEG_SIZE // 2
+            if not (
+                -30 < sx < self.camera.view_w + 30
+                and -30 < sy < self.camera.view_h + 30
+            ):
+                continue
+            r = int(9 * pulse)
+            pg.draw.circle(screen, (255, 200, 100), (sx, sy), r, 2)
+            pg.draw.circle(screen, (255, 200, 100), (sx, sy), 3)
+
+    def _draw_waypoint(self, screen, cam_x, cam_y):
+        if self.state.waypoint is None:
+            return
+        gx, gy = self.state.waypoint
+        sx = gx * SEG_SIZE - cam_x + SEG_SIZE // 2
+        sy = gy * SEG_SIZE - cam_y + SEG_SIZE // 2
+        if not (
+            -30 < sx < self.camera.view_w + 30 and -30 < sy < self.camera.view_h + 30
+        ):
+            return
+        # Флажок
+        pg.draw.line(screen, (230, 230, 200), (sx, sy - 4), (sx, sy - 16), 2)
+        pg.draw.polygon(
+            screen, (255, 230, 80), [(sx, sy - 16), (sx + 12, sy - 12), (sx, sy - 8)]
+        )
+        pg.draw.circle(screen, (255, 230, 80), (sx, sy), 4)
+        pg.draw.circle(screen, (30, 30, 30), (sx, sy), 4, 1)
 
     def _draw_hover(self, screen, cam_x, cam_y):
         if self.hover_seg is None:
@@ -495,11 +536,54 @@ class WorldScene(Scene):
         y += bar_h
         t = self._font_small.render(f"Золото: {s.gold}", True, (240, 220, 100))
         screen.blit(t, (x, y))
-        y += 18
-        active = len(s.quest_log.active())
-        if active:
-            t = self._font_small.render(f"Квесты: {active}  [J]", True, (200, 220, 250))
-            screen.blit(t, (x, y))
+        y += 20
+
+        # === Навигация ===
+        if self.mode == "play":
+            if s.waypoint is not None:
+                wgx, wgy = s.waypoint
+                dx, dy = wgx - self.gx, wgy - self.gy
+                dist = math.hypot(dx, dy)
+                if dist == 0:
+                    text = "★ Вы на метке  (ПКМ — снять)"
+                else:
+                    text = f"★ Метка: {direction_name(dx, dy)} ({int(dist)} сегм.)"
+                surf = self._font_small.render(text, True, (255, 230, 80))
+                screen.blit(surf, (x, y))
+                y += 18
+
+            active_with_target = [
+                q for q in s.quest_log.active() if q.target_gx is not None
+            ]
+            if active_with_target:
+                nearest = min(
+                    active_with_target,
+                    key=lambda q: (
+                        (q.target_gx - self.gx) ** 2 + (q.target_gy - self.gy) ** 2
+                    ),
+                )
+                dx = nearest.target_gx - self.gx
+                dy = nearest.target_gy - self.gy
+                dist = math.hypot(dx, dy)
+                title = (
+                    nearest.title
+                    if len(nearest.title) <= 22
+                    else (nearest.title[:21] + "…")
+                )
+                if dist == 0:
+                    text = f"⚑ {title}: здесь"
+                else:
+                    text = f"⚑ {title}: {direction_name(dx, dy)} ({int(dist)})"
+                surf = self._font_small.render(text, True, (255, 200, 100))
+                screen.blit(surf, (x, y))
+                y += 18
+
+            remaining = len(s.quest_log.active()) - len(active_with_target)
+            if remaining > 0:
+                surf = self._font_small.render(
+                    f"Ещё квестов: {remaining}  [J]", True, (180, 180, 180)
+                )
+                screen.blit(surf, (x, y))
 
     def _bar(self, screen, x, y, w, h, ratio, color):
         pg.draw.rect(screen, (30, 30, 30), (x, y, w, h))
@@ -534,19 +618,37 @@ class WorldScene(Scene):
         screen.blit(scaled, (mm_x, mm_y))
         pg.draw.rect(screen, (150, 150, 170), (mm_x, mm_y, MINIMAP_W, MINIMAP_H), 2)
 
+        def to_mm(gx, gy):
+            return (
+                mm_x + int(gx * MINIMAP_W / self.world.width),
+                mm_y + int(gy * MINIMAP_H / self.world.height),
+            )
+
         # POI
         for poi in self.world.pois:
             if not self._is_poi_visible(poi):
                 continue
-            px = mm_x + int(poi.gx * MINIMAP_W / self.world.width)
-            py = mm_y + int(poi.gy * MINIMAP_H / self.world.height)
+            px, py = to_mm(poi.gx, poi.gy)
             color = (100, 100, 100) if poi.cleared else poi.icon_color
             pg.draw.circle(screen, color, (px, py), 3)
             pg.draw.circle(screen, (20, 20, 20), (px, py), 3, 1)
 
+        # Квестовые цели (в play-режиме)
+        if self.mode == "play":
+            for q in self.state.quest_log.active():
+                if q.target_gx is None:
+                    continue
+                px, py = to_mm(q.target_gx, q.target_gy)
+                pg.draw.circle(screen, (255, 200, 100), (px, py), 3, 1)
+
+            # Метка
+            if self.state.waypoint is not None:
+                px, py = to_mm(*self.state.waypoint)
+                pg.draw.circle(screen, (255, 230, 80), (px, py), 4)
+                pg.draw.circle(screen, (30, 30, 30), (px, py), 4, 1)
+
         # Игрок
-        px = mm_x + int(self.gx * MINIMAP_W / self.world.width)
-        py = mm_y + int(self.gy * MINIMAP_H / self.world.height)
+        px, py = to_mm(self.gx, self.gy)
         pg.draw.circle(screen, (255, 60, 60), (px, py), 4)
         pg.draw.circle(screen, (255, 255, 255), (px, py), 4, 1)
 
@@ -554,9 +656,9 @@ class WorldScene(Scene):
         if self.mode == "spawn":
             text = "ЛКМ / Enter — выбрать старт | WASD — панорама | I C K J"
         elif self.state.stamina > 0:
-            text = "WASD — шаг | Enter — войти | I C K J — панели"
+            text = "WASD — шаг | ПКМ — метка | Enter — войти | I C K J"
         else:
-            text = "Нет сил идти — Enter для отдыха | I C K J"
+            text = "Нет сил — Enter для отдыха | ПКМ — метка | I C K J"
         surf = self._font_hint.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)

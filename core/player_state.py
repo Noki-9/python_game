@@ -37,6 +37,7 @@ class PlayerState:
         self.skill_points = 0
 
         self.quest_log = QuestLog()
+        self.waypoint = None
 
         # --- Мана и умения ---
         self.max_mana = self.class_def.max_mana

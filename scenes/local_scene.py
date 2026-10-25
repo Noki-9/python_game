@@ -7,6 +7,7 @@ from core.abilities import get_abilities_for_class, get_ability_for_key
 from core.camera import Camera
 from core.config import TILE_SIZE, screen
 from core.scene_manager import Scene
+from core.utils import direction_name
 from models.player import Player
 from models.projectile import Projectile
 from ui.character_ui import CharacterUI
@@ -680,6 +681,33 @@ class LocalScene(Scene):
                 True,
                 (200, 220, 250),
             )
+            screen.blit(surf, (10, y))
+
+        # === Навигация ===
+        y += 20
+        state = self.manager.player_state
+        if state.waypoint is not None:
+            wgx, wgy = state.waypoint
+            dx, dy = wgx - self.segment.gx, wgy - self.segment.gy
+            dist = math.hypot(dx, dy)
+            if dist == 0:
+                text = "★ Вы на метке"
+            else:
+                text = f"★ Метка: {direction_name(dx, dy)} ({int(dist)})"
+            surf = self._font_hud.render(text, True, (255, 230, 80))
+            screen.blit(surf, (10, y))
+            y += 18
+
+        # Мы на цели какого-то квеста?
+        on_target = [
+            q
+            for q in state.quest_log.active()
+            if q.target_gx == self.segment.gx and q.target_gy == self.segment.gy
+        ]
+        if on_target:
+            q = on_target[0]
+            text = f"⚑ Вы на месте квеста: {q.title}"
+            surf = self._font_hud.render(text, True, (255, 200, 100))
             screen.blit(surf, (10, y))
 
     def _draw_active_quests(self, screen):

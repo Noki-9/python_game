@@ -1,5 +1,6 @@
 import random
 
+from world.biome import Biome
 from world.quest import Quest, QuestObjective, QuestType
 
 KILL_TARGETS = [
@@ -23,7 +24,33 @@ BOSS_TARGETS = [
 ]
 
 
-def generate_quest(world, npc, seed, level=1):
+ENEMY_BIOMES = {
+    "goblin": {Biome.FOREST, Biome.TUNDRA, Biome.PLAINS},
+    "bandit": {Biome.FOREST, Biome.DESERT, Biome.PLAINS},
+    "skeleton": {Biome.DESERT, Biome.TUNDRA, Biome.MOUNTAIN},
+    "wolf": {Biome.FOREST},
+    "bear": {Biome.FOREST},
+    "troll": {Biome.MOUNTAIN},
+}
+
+
+def _find_nearest_segment(world, biomes, from_gx, from_gy):
+    """Ближайший проходимый сегмент нужного биома."""
+    best = None
+    best_d = float("inf")
+    for (gx, gy), seg in world.segments.items():
+        if seg.biome not in biomes:
+            continue
+        if not seg.biome.walkable:
+            continue
+        d = (gx - from_gx) ** 2 + (gy - from_gy) ** 2
+        if d < best_d:
+            best_d = d
+            best = (gx, gy)
+    return best
+
+
+def generate_quest(world, npc, seed, level=1, player_gx=0, player_gy=0):
     rng = random.Random(seed)
     choice = rng.choices(
         [QuestType.KILL, QuestType.CLEAR, QuestType.FETCH, QuestType.BOSS],
@@ -59,6 +86,8 @@ def generate_quest(world, npc, seed, level=1):
                 reward_xp=150,
                 giver_npc_id=npc.npc_id,
                 giver_name=npc.name,
+                target_gx=poi.gx,
+                target_gy=poi.gy,
             )
 
     if choice == QuestType.BOSS:
@@ -68,6 +97,9 @@ def generate_quest(world, npc, seed, level=1):
             target_id=boss_id,
             required=1,
         )
+        biomes = ENEMY_BIOMES.get(boss_id, {Biome.FOREST})
+        target = _find_nearest_segment(world, biomes, player_gx, player_gy)
+        tgx, tgy = target if target else (None, None)
         return Quest(
             quest_id=f"boss_{boss_id}_{rng.randint(0, 999999)}",
             title="Охота на босса",
@@ -78,6 +110,8 @@ def generate_quest(world, npc, seed, level=1):
             reward_xp=200,
             giver_npc_id=npc.npc_id,
             giver_name=npc.name,
+            target_gx=tgx,
+            target_gy=tgy,
         )
 
     if choice == QuestType.FETCH:
@@ -99,6 +133,8 @@ def generate_quest(world, npc, seed, level=1):
             giver_npc_id=npc.npc_id,
             giver_name=npc.name,
             consume_items=True,
+            target_gx=None,
+            target_gy=None,
         )
 
     # KILL — по умолчанию
@@ -109,6 +145,9 @@ def generate_quest(world, npc, seed, level=1):
         target_id=enemy_id,
         required=count,
     )
+    biomes = ENEMY_BIOMES.get(enemy_id, {Biome.PLAINS, Biome.FOREST})
+    target = _find_nearest_segment(world, biomes, player_gx, player_gy)
+    tgx, tgy = target if target else (None, None)
     return Quest(
         quest_id=f"kill_{enemy_id}_{rng.randint(0, 999999)}",
         title=f"Охота: {enemy_name}",
@@ -119,16 +158,13 @@ def generate_quest(world, npc, seed, level=1):
         reward_xp=50 + count * 10,
         giver_npc_id=npc.npc_id,
         giver_name=npc.name,
+        target_gx=tgx,
+        target_gy=tgy,
     )
 
 
 def make_story_quests(world):
-    """Сюжетные квесты (3 акта), создаются при старте игры."""
-    from world.quest import Quest, QuestObjective, QuestType
-
     quests = []
-
-    # Акт 1: зачистить 2 квест-данжа
     quests.append(
         Quest(
             quest_id="story_act1",
@@ -137,7 +173,7 @@ def make_story_quests(world):
             quest_type=QuestType.CLEAR,
             objective=QuestObjective(
                 description="Зачистить данжи",
-                target_id="__any_quest__",  # см. ниже
+                target_id="__any_quest__",
                 required=2,
             ),
             reward_gold=200,

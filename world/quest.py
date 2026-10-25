@@ -45,6 +45,8 @@ class Quest:
     giver_npc_id: str | None = None
     giver_name: str | None = None
     consume_items: bool = False
+    target_gx: int | None = None
+    target_gy: int | None = None
 
     def on_kill(self, enemy_id) -> bool:
         if self.status != QuestStatus.ACTIVE:
@@ -84,7 +86,6 @@ class Quest:
         return False
 
     def consume_required_items(self, inventory):
-        """Забирает предметы из инвентаря при завершении FETCH-квеста."""
         if not self.consume_items:
             return
         if self.quest_type != QuestType.FETCH:

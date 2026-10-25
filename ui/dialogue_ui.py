@@ -48,8 +48,8 @@ class DialogueUI(UIOverlay):
                 self._flash("У меня нет товаров")
                 return
             from ui.trade_ui import TradeUI
-
-            self.manager.push_ui(TradeUI(self.width, self.height, self.state, self.npc))
+            self.manager.push_ui(
+                TradeUI(self.width, self.height, self.state, self.npc))
 
         elif option.action == "heal":
             if self.state.gold < option.cost:
@@ -74,19 +74,32 @@ class DialogueUI(UIOverlay):
             self._flash("Сначала выполни текущее задание")
             return
 
-        seed = (
-            hash((self.npc.npc_id, self.state.level, len(self.state.quest_log.quests)))
-            & 0xFFFFFFFF
+        import math
+        from core.utils import direction_name
+
+        seed = hash((self.npc.npc_id, self.state.level,
+                     len(self.state.quest_log.quests))) & 0xFFFFFFFF
+        quest = generate_quest(
+            self.world, self.npc, seed, self.state.level,
+            self.state.gx, self.state.gy,
         )
-        quest = generate_quest(self.world, self.npc, seed, self.state.level)
-        if self.state.quest_log.add(quest):
-            self._flash(f"Новый квест: {quest.title}")
-        else:
+        if not self.state.quest_log.add(quest):
             self._flash("У меня больше нет заданий")
+            return
+
+        if quest.target_gx is not None:
+            dx = quest.target_gx - self.state.gx
+            dy = quest.target_gy - self.state.gy
+            dist = math.hypot(dx, dy)
+            self._flash(
+                f"Новый квест: {quest.title}\n"
+                f"Цель: {direction_name(dx, dy)}, ~{int(dist)} сегм.")
+        else:
+            self._flash(f"Новый квест: {quest.title}")
 
     def _flash(self, text):
         self.message = text
-        self.message_timer = 2.5
+        self.message_timer = 2.8
 
     def update(self, dt):
         if self.message_timer > 0:
@@ -96,8 +109,7 @@ class DialogueUI(UIOverlay):
         super().draw(screen)
 
         title = self.font_big.render(
-            f"{self.npc.name} — {self.npc.role_title}",
-            True,
+            f"{self.npc.name} — {self.npc.role_title}", True,
             self.npc.texture,
         )
         screen.blit(title, ((self.width - title.get_width()) // 2, 60))
@@ -124,11 +136,17 @@ class DialogueUI(UIOverlay):
             self.option_rects.append(rect)
             y += 42
 
+        # Flash с поддержкой \n
         if self.message_timer > 0:
-            surf = self.font_med.render(self.message, True, (255, 230, 120))
-            screen.blit(surf, ((self.width - surf.get_width()) // 2, y + 20))
+            y_flash = y + 14
+            for line in self.message.split("\n"):
+                surf = self.font_med.render(line, True, (255, 230, 120))
+                screen.blit(surf,
+                             ((self.width - surf.get_width()) // 2, y_flash))
+                y_flash += 26
 
         hint = self.font_small.render(
-            "ЛКМ или 1-9 — выбрать, Esc — закрыть", True, (150, 150, 150)
-        )
-        screen.blit(hint, ((self.width - hint.get_width()) // 2, self.height - 60))
+            "ЛКМ или 1-9 — выбрать, Esc — закрыть",
+            True, (150, 150, 150))
+        screen.blit(hint, ((self.width - hint.get_width()) // 2,
+                           self.height - 60))
