@@ -2,8 +2,17 @@ import pygame as pg
 
 
 class Unit:
-    def __init__(self, type: str, x: int, y: int, rect_x: int, rect_y: int,
-                 health: int, speed: int, texture: str):
+    def __init__(
+        self,
+        type: str,
+        x: int,
+        y: int,
+        rect_x: int,
+        rect_y: int,
+        health: int,
+        speed: int,
+        texture: str,
+    ):
         self.type = type
         self.health = health
         self.x = x

@@ -16,6 +16,11 @@ class SceneManager:
         self.scene = scene
         self.scene.on_enter(**kwargs)
 
-    def handle_event(self, e): self.scene.handle_event(e)
-    def update(self, dt):       self.scene.update(dt)
-    def draw(self, screen):     self.scene.draw(screen)
+    def handle_event(self, e):
+        self.scene.handle_event(e)
+
+    def update(self, dt):
+        self.scene.update(dt)
+
+    def draw(self, screen):
+        self.scene.draw(screen)

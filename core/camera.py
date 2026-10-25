@@ -1,5 +1,3 @@
-
-
 class Camera:
     def __init__(self, view_w: int, view_h: int):
         self.x = 0
@@ -17,8 +15,10 @@ class Camera:
         self.y = max(0, min(self.y, map_h_px - self.view_h))
 
         # если карта меньше экрана — прижимаем к 0
-        if map_w_px < self.view_w: self.x = (map_w_px - self.view_w) / 2
-        if map_h_px < self.view_h: self.y = (map_h_px - self.view_h) / 2
+        if map_w_px < self.view_w:
+            self.x = (map_w_px - self.view_w) / 2
+        if map_h_px < self.view_h:
+            self.y = (map_h_px - self.view_h) / 2
 
     def apply(self, x: float, y: float) -> tuple[int, int]:
         """Мировые координаты → экранные."""

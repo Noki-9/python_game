@@ -30,11 +30,16 @@ class WorldMap:
         temp = self.temperature.fbm(gx * 0.04, gy * 0.04, octaves=3)
         moist = self.moisture.fbm(gx * 0.08, gy * 0.08, octaves=3)
 
-        if elev < 0.35:  return Biome.OCEAN
-        if elev > 0.75:  return Biome.MOUNTAIN
-        if temp < 0.30:  return Biome.TUNDRA
-        if temp > 0.65 and moist < 0.35: return Biome.DESERT
-        if moist > 0.60: return Biome.FOREST
+        if elev < 0.35:
+            return Biome.OCEAN
+        if elev > 0.75:
+            return Biome.MOUNTAIN
+        if temp < 0.30:
+            return Biome.TUNDRA
+        if temp > 0.65 and moist < 0.35:
+            return Biome.DESERT
+        if moist > 0.60:
+            return Biome.FOREST
         return Biome.PLAINS
 
     def get(self, gx: int, gy: int) -> Segment | None:

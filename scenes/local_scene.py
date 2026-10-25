@@ -6,12 +6,12 @@ from core.scene_manager import Scene
 from models.player import Player
 
 COLORS = {
-    "grass":  (100, 180, 90),
-    "sand":   (230, 210, 140),
-    "snow":   (230, 240, 250),
-    "water":  (60, 100, 200),
-    "rock":   (110, 100, 90),
-    "tree":   (50, 120, 60),
+    "grass": (100, 180, 90),
+    "sand": (230, 210, 140),
+    "snow": (230, 240, 250),
+    "water": (60, 100, 200),
+    "rock": (110, 100, 90),
+    "tree": (50, 120, 60),
     "cactus": (70, 140, 80),
 }
 
@@ -32,8 +32,10 @@ class LocalScene(Scene):
         gx, gy = self.segment.gx, self.segment.gy
         result = {}
         for name, (dx, dy) in (
-            ('n', (0, -1)), ('s', (0, 1)),
-            ('w', (-1, 0)), ('e', (1, 0)),
+            ("n", (0, -1)),
+            ("s", (0, 1)),
+            ("w", (-1, 0)),
+            ("e", (1, 0)),
         ):
             seg = world.get(gx + dx, gy + dy)
             result[name] = seg.biome if seg else None
@@ -46,8 +48,7 @@ class LocalScene(Scene):
 
         cx = (self.map.width // 2) * TILE_SIZE
         cy = (self.map.height // 2) * TILE_SIZE
-        self.player = Player(cx, cy, TILE_SIZE - 8, TILE_SIZE - 8,
-                             100, 300, 'blue')
+        self.player = Player(cx, cy, TILE_SIZE - 8, TILE_SIZE - 8, 100, 300, "blue")
 
         sw, sh = screen.get_size()
         self.camera = Camera(sw, sh)
@@ -57,6 +58,7 @@ class LocalScene(Scene):
     def handle_event(self, event):
         if event.type == pg.KEYDOWN and event.key == pg.K_ESCAPE:
             from scenes.world_scene import WorldScene
+
             self.manager.switch(
                 WorldScene(self.manager, self.manager.world),
                 world_pos=self.return_pos,
@@ -69,9 +71,9 @@ class LocalScene(Scene):
             self.player.y + self.player.rect_y / 2,
             radius_px=96,
         )
-        self.player.update(dt, walls=nearby,
-                           map_w_px=self.map_w_px,
-                           map_h_px=self.map_h_px)
+        self.player.update(
+            dt, walls=nearby, map_w_px=self.map_w_px, map_h_px=self.map_h_px
+        )
         self.camera.follow(self.player, self.map_w_px, self.map_h_px)
 
     def draw(self, screen):
@@ -86,9 +88,11 @@ class LocalScene(Scene):
             sy = ty * TILE_SIZE - int(self.camera.y)
             for tx in range(tx0, tx1):
                 sx = tx * TILE_SIZE - int(self.camera.x)
-                pg.draw.rect(screen, COLORS[row[tx]],
-                             (sx, sy, TILE_SIZE, TILE_SIZE))
+                pg.draw.rect(screen, COLORS[row[tx]], (sx, sy, TILE_SIZE, TILE_SIZE))
 
         px, py = self.camera.apply(self.player.x, self.player.y)
-        pg.draw.rect(screen, self.player.texture,
-                     (px, py, self.player.rect_x, self.player.rect_y))
+        pg.draw.rect(
+            screen,
+            self.player.texture,
+            (px, py, self.player.rect_x, self.player.rect_y),
+        )

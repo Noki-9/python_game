@@ -13,6 +13,7 @@ class Segment:
     def get_local_map(self, neighbors=None):
         if self.local_map is None:
             from world.local_map import generate_local_map
+
             self.local_map = generate_local_map(self.biome, self.seed, neighbors)
             self.explored = True
         return self.local_map

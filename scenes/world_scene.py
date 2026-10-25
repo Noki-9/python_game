@@ -9,14 +9,16 @@ CAM_PAN_SPEED = 600
 
 
 def _mix(a, b, t):
-    return (int(a[0]*(1-t) + b[0]*t),
-            int(a[1]*(1-t) + b[1]*t),
-            int(a[2]*(1-t) + b[2]*t))
+    return (
+        int(a[0] * (1 - t) + b[0] * t),
+        int(a[1] * (1 - t) + b[1] * t),
+        int(a[2] * (1 - t) + b[2] * t),
+    )
 
 
 def _edge_noise(gx, gy, direction, i):
     """Детерминированный псевдослучайный [0,1) от координат и позиции."""
-    d = {'N': 0, 'S': 1, 'W': 2, 'E': 3}[direction]
+    d = {"N": 0, "S": 1, "W": 2, "E": 3}[direction]
     h = (gx * 73856093) ^ (gy * 19349663) ^ (d * 83492791) ^ (i * 2654435761)
     h = (h ^ (h >> 16)) * 0x85EBCA6B & 0xFFFFFFFF
     h = h ^ (h >> 13)
@@ -43,7 +45,7 @@ class WorldScene(Scene):
 
     # ---------- Пре-рендер ----------
     def _ensure_prerender(self):
-        if getattr(self.world, '_prerender', None) is None:
+        if getattr(self.world, "_prerender", None) is None:
             self._prerender_map()
 
     def _prerender_map(self):
@@ -52,14 +54,21 @@ class WorldScene(Scene):
 
         # Проход 1: базовые цвета биомов
         for (gx, gy), seg in self.world.segments.items():
-            pg.draw.rect(surf, seg.biome.color,
-                         (gx*SEG_SIZE, gy*SEG_SIZE, SEG_SIZE, SEG_SIZE))
+            pg.draw.rect(
+                surf,
+                seg.biome.color,
+                (gx * SEG_SIZE, gy * SEG_SIZE, SEG_SIZE, SEG_SIZE),
+            )
 
         # Проход 2: дизеринг на границах
         for (gx, gy), seg in self.world.segments.items():
-            for direction, (dx, dy) in (('N', (0,-1)), ('S', (0,1)),
-                                        ('W', (-1,0)), ('E', (1,0))):
-                nbr = self.world.segments.get((gx+dx, gy+dy))
+            for direction, (dx, dy) in (
+                ("N", (0, -1)),
+                ("S", (0, 1)),
+                ("W", (-1, 0)),
+                ("E", (1, 0)),
+            ):
+                nbr = self.world.segments.get((gx + dx, gy + dy))
                 if nbr is None or nbr.biome == seg.biome:
                     continue
 
@@ -69,8 +78,9 @@ class WorldScene(Scene):
                 if seg_walk and not nbr_walk:
                     # мы проходимые, сосед непроходимый —
                     # размываем НАШУ сторону цветом соседа
-                    self._draw_edge_dither(surf, gx, gy, direction,
-                                        seg.biome.color, nbr.biome.color)
+                    self._draw_edge_dither(
+                        surf, gx, gy, direction, seg.biome.color, nbr.biome.color
+                    )
 
                 elif not seg_walk and nbr_walk:
                     # мы непроходимые, сосед проходимый —
@@ -80,8 +90,9 @@ class WorldScene(Scene):
                 else:
                     # оба проходимые / оба непроходимые —
                     # дизеринг с обеих сторон
-                    self._draw_edge_dither(surf, gx, gy, direction,
-                                        seg.biome.color, nbr.biome.color)
+                    self._draw_edge_dither(
+                        surf, gx, gy, direction, seg.biome.color, nbr.biome.color
+                    )
 
         self.world._prerender = surf
 
@@ -94,24 +105,26 @@ class WorldScene(Scene):
         for i in range(n_strips):
             n = _edge_noise(gx, gy, direction, i)
             if n < 0.30:
-                continue                        # пропуск — рваный край
-            thickness = int(1 + (n - 0.30) / 0.70 * 4)   # 1..5 px
+                continue  # пропуск — рваный край
+            thickness = int(1 + (n - 0.30) / 0.70 * 4)  # 1..5 px
             color = blend if n < 0.60 else nbr_color
 
-            if direction == 'N':
-                pg.draw.rect(surface, color,
-                             (sx + i*2, sy, 2, thickness))
-            elif direction == 'S':
-                pg.draw.rect(surface, color,
-                             (sx + i*2, sy + SEG_SIZE - thickness,
-                              2, thickness))
-            elif direction == 'W':
-                pg.draw.rect(surface, color,
-                             (sx, sy + i*2, thickness, 2))
-            elif direction == 'E':
-                pg.draw.rect(surface, color,
-                             (sx + SEG_SIZE - thickness, sy + i*2,
-                              thickness, 2))
+            if direction == "N":
+                pg.draw.rect(surface, color, (sx + i * 2, sy, 2, thickness))
+            elif direction == "S":
+                pg.draw.rect(
+                    surface,
+                    color,
+                    (sx + i * 2, sy + SEG_SIZE - thickness, 2, thickness),
+                )
+            elif direction == "W":
+                pg.draw.rect(surface, color, (sx, sy + i * 2, thickness, 2))
+            elif direction == "E":
+                pg.draw.rect(
+                    surface,
+                    color,
+                    (sx + SEG_SIZE - thickness, sy + i * 2, thickness, 2),
+                )
 
     # ---------- Жизненный цикл ----------
     def on_enter(self, world_pos=None, mode=None):
@@ -138,10 +151,12 @@ class WorldScene(Scene):
     def _center_camera(self):
         cx = self.gx * SEG_SIZE + SEG_SIZE / 2
         cy = self.gy * SEG_SIZE + SEG_SIZE / 2
-        self.camera.x = max(0, min(cx - self.camera.view_w / 2,
-                                   self.map_w_px - self.camera.view_w))
-        self.camera.y = max(0, min(cy - self.camera.view_h / 2,
-                                   self.map_h_px - self.camera.view_h))
+        self.camera.x = max(
+            0, min(cx - self.camera.view_w / 2, self.map_w_px - self.camera.view_w)
+        )
+        self.camera.y = max(
+            0, min(cy - self.camera.view_h / 2, self.map_h_px - self.camera.view_h)
+        )
 
     # ---------- Ввод ----------
     def handle_event(self, event):
@@ -160,10 +175,14 @@ class WorldScene(Scene):
         if event.type != pg.KEYDOWN:
             return
         dx = dy = 0
-        if event.key == pg.K_w: dy = -1
-        if event.key == pg.K_s: dy = 1
-        if event.key == pg.K_a: dx = -1
-        if event.key == pg.K_d: dx = 1
+        if event.key == pg.K_w:
+            dy = -1
+        if event.key == pg.K_s:
+            dy = 1
+        if event.key == pg.K_a:
+            dx = -1
+        if event.key == pg.K_d:
+            dx = 1
 
         if (dx or dy) and self._can_move(dx, dy):
             self.gx += dx
@@ -174,8 +193,10 @@ class WorldScene(Scene):
             seg = self.world.get(self.gx, self.gy)
             if seg and seg.biome.walkable:
                 from scenes.local_scene import LocalScene
-                self.manager.switch(LocalScene(self.manager, seg),
-                                    return_pos=(self.gx, self.gy))
+
+                self.manager.switch(
+                    LocalScene(self.manager, seg), return_pos=(self.gx, self.gy)
+                )
 
     def _try_pick_segment(self, screen_pos):
         gx, gy = self._screen_to_segment(screen_pos)
@@ -206,17 +227,29 @@ class WorldScene(Scene):
             return
         keys = pg.key.get_pressed()
         pan_x = pan_y = 0
-        if keys[pg.K_w]: pan_y -= 1
-        if keys[pg.K_s]: pan_y += 1
-        if keys[pg.K_a]: pan_x -= 1
-        if keys[pg.K_d]: pan_x += 1
+        if keys[pg.K_w]:
+            pan_y -= 1
+        if keys[pg.K_s]:
+            pan_y += 1
+        if keys[pg.K_a]:
+            pan_x -= 1
+        if keys[pg.K_d]:
+            pan_x += 1
         if pan_x or pan_y:
-            self.camera.x = max(0, min(
-                self.camera.x + pan_x * CAM_PAN_SPEED * dt,
-                self.map_w_px - self.camera.view_w))
-            self.camera.y = max(0, min(
-                self.camera.y + pan_y * CAM_PAN_SPEED * dt,
-                self.map_h_px - self.camera.view_h))
+            self.camera.x = max(
+                0,
+                min(
+                    self.camera.x + pan_x * CAM_PAN_SPEED * dt,
+                    self.map_w_px - self.camera.view_w,
+                ),
+            )
+            self.camera.y = max(
+                0,
+                min(
+                    self.camera.y + pan_y * CAM_PAN_SPEED * dt,
+                    self.map_h_px - self.camera.view_h,
+                ),
+            )
 
         gx, gy = self._screen_to_segment(pg.mouse.get_pos())
         self.hover_seg = (gx, gy) if gx is not None else None
@@ -229,24 +262,31 @@ class WorldScene(Scene):
 
         # Блит только видимого куска пре-рендера
         screen.blit(
-            self.world._prerender, (0, 0),
+            self.world._prerender,
+            (0, 0),
             (cam_x, cam_y, self.camera.view_w, self.camera.view_h),
         )
 
         # Разведанные сегменты — динамическая обводка
         tx0 = max(0, int(cam_x // SEG_SIZE) - 1)
         ty0 = max(0, int(cam_y // SEG_SIZE) - 1)
-        tx1 = min(self.world.width,
-                  int((cam_x + self.camera.view_w) // SEG_SIZE) + 2)
-        ty1 = min(self.world.height,
-                  int((cam_y + self.camera.view_h) // SEG_SIZE) + 2)
+        tx1 = min(self.world.width, int((cam_x + self.camera.view_w) // SEG_SIZE) + 2)
+        ty1 = min(self.world.height, int((cam_y + self.camera.view_h) // SEG_SIZE) + 2)
         for gy in range(ty0, ty1):
             for gx in range(tx0, tx1):
                 seg = self.world.segments.get((gx, gy))
                 if seg and seg.explored:
-                    pg.draw.rect(screen, (255, 255, 0),
-                                 (gx*SEG_SIZE - cam_x, gy*SEG_SIZE - cam_y,
-                                  SEG_SIZE - 1, SEG_SIZE - 1), 1)
+                    pg.draw.rect(
+                        screen,
+                        (255, 255, 0),
+                        (
+                            gx * SEG_SIZE - cam_x,
+                            gy * SEG_SIZE - cam_y,
+                            SEG_SIZE - 1,
+                            SEG_SIZE - 1,
+                        ),
+                        1,
+                    )
 
         if self.mode == "spawn":
             self._draw_hover(screen, cam_x, cam_y)

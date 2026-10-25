@@ -22,10 +22,14 @@ class Player(Unit):
         keys = pg.key.get_pressed()
 
         dx, dy = 0, 0
-        if keys[pg.K_w]: dy -= 1
-        if keys[pg.K_s]: dy += 1
-        if keys[pg.K_a]: dx -= 1
-        if keys[pg.K_d]: dx += 1
+        if keys[pg.K_w]:
+            dy -= 1
+        if keys[pg.K_s]:
+            dy += 1
+        if keys[pg.K_a]:
+            dx -= 1
+        if keys[pg.K_d]:
+            dx += 1
 
         length = math.hypot(dx, dy)
         if length != 0:

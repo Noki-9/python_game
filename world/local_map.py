@@ -6,9 +6,9 @@ from world.biome import Biome
 
 WALL_TILES = {"water", "rock", "tree", "cactus"}
 
-TRANSITION_WIDTH = 12    # макс. ширина переходной полосы
-WATER_DEPTH = 3          # минимум воды у самого края
-NOISE_AMPLITUDE = 6      # насколько шум сдвигает границу (±6 тайлов)
+TRANSITION_WIDTH = 12  # макс. ширина переходной полосы
+WATER_DEPTH = 3  # минимум воды у самого края
+NOISE_AMPLITUDE = 6  # насколько шум сдвигает границу (±6 тайлов)
 
 
 class LocalMap:
@@ -22,13 +22,13 @@ class LocalMap:
 
     def _build_walls_index(self):
         import pygame as pg
+
         for ty in range(self.height):
             row = self.tiles[ty]
             for tx in range(self.width):
                 if row[tx] in WALL_TILES:
                     chunk = (tx // CHUNK_SIZE, ty // CHUNK_SIZE)
-                    rect = pg.Rect(tx * TILE_SIZE, ty * TILE_SIZE,
-                                   TILE_SIZE, TILE_SIZE)
+                    rect = pg.Rect(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE)
                     self.walls_by_chunk.setdefault(chunk, []).append(rect)
 
     def is_walkable(self, tx, ty):
@@ -52,28 +52,32 @@ class LocalMap:
 
 # --- Утилиты границы ---
 
-_DIR_OFFSET = {'n': 0.0, 's': 500.0, 'w': 1000.0, 'e': 1500.0}
-_DIR_NEIGHBOR = {'n': (0, -1), 's': (0, 1), 'w': (-1, 0), 'e': (1, 0)}
+_DIR_OFFSET = {"n": 0.0, "s": 500.0, "w": 1000.0, "e": 1500.0}
+_DIR_NEIGHBOR = {"n": (0, -1), "s": (0, 1), "w": (-1, 0), "e": (1, 0)}
 
 
 def _distance_to_edge(x, y, w, h, direction):
-    if direction == 'n': return y
-    if direction == 's': return h - 1 - y
-    if direction == 'w': return x
-    if direction == 'e': return w - 1 - x
+    if direction == "n":
+        return y
+    if direction == "s":
+        return h - 1 - y
+    if direction == "w":
+        return x
+    if direction == "e":
+        return w - 1 - x
     return 999
 
 
 def _edge_ranges(direction, w, h, max_depth):
     """Диапазоны (ys, xs) — только клетки в полосе у нужного края."""
     max_depth = int(max_depth) + 2
-    if direction == 'n':
+    if direction == "n":
         return range(min(h, max_depth)), range(w)
-    if direction == 's':
+    if direction == "s":
         return range(max(0, h - max_depth), h), range(w)
-    if direction == 'w':
+    if direction == "w":
         return range(h), range(min(w, max_depth))
-    if direction == 'e':
+    if direction == "e":
         return range(h), range(max(0, w - max_depth), w)
     return range(0), range(0)
 
@@ -88,6 +92,7 @@ def _noisy_distance(x, y, w, h, direction, noise):
 
 # --- Обработчики переходов ---
 
+
 def _transition_ocean(tiles, w, h, direction, rng, noise):
     max_depth = TRANSITION_WIDTH + NOISE_AMPLITUDE + 2
     ys, xs = _edge_ranges(direction, w, h, max_depth)
@@ -97,21 +102,21 @@ def _transition_ocean(tiles, w, h, direction, rng, noise):
         for x in xs:
             nd = _noisy_distance(x, y, w, h, direction, noise)
             if nd < WATER_DEPTH:
-                tiles[y][x] = 'water'
+                tiles[y][x] = "water"
             elif nd < TRANSITION_WIDTH:
-                if tiles[y][x] not in ('water', 'rock'):
-                    tiles[y][x] = 'sand'
+                if tiles[y][x] not in ("water", "rock"):
+                    tiles[y][x] = "sand"
 
     # Разбросанные камни на пляже
     for y in ys:
         for x in xs:
-            if tiles[y][x] == 'sand' and rng.random() < 0.04:
-                tiles[y][x] = 'rock'
+            if tiles[y][x] == "sand" and rng.random() < 0.04:
+                tiles[y][x] = "rock"
 
 
-def _transition_scatter(tiles, w, h, direction, rng, noise,
-                        tile, width_scale, probability,
-                        allowed_sources):
+def _transition_scatter(
+    tiles, w, h, direction, rng, noise, tile, width_scale, probability, allowed_sources
+):
     """Общий случай: разбрасывает tile с шумной шириной."""
     max_depth = (TRANSITION_WIDTH * width_scale) + NOISE_AMPLITUDE + 2
     ys, xs = _edge_ranges(direction, w, h, max_depth)
@@ -131,49 +136,94 @@ def _apply_transition(tiles, w, h, direction, neighbor_biome, rng, noise):
         _transition_ocean(tiles, w, h, direction, rng, noise)
 
     elif neighbor_biome == Biome.MOUNTAIN:
-        _transition_scatter(tiles, w, h, direction, rng, noise,
-                            tile='rock', width_scale=0.7, probability=0.85,
-                            allowed_sources={'grass', 'sand', 'snow', 'tree'})
+        _transition_scatter(
+            tiles,
+            w,
+            h,
+            direction,
+            rng,
+            noise,
+            tile="rock",
+            width_scale=0.7,
+            probability=0.85,
+            allowed_sources={"grass", "sand", "snow", "tree"},
+        )
 
     elif neighbor_biome == Biome.DESERT:
-        _transition_scatter(tiles, w, h, direction, rng, noise,
-                            tile='sand', width_scale=0.9, probability=1.0,
-                            allowed_sources={'grass', 'snow'})
+        _transition_scatter(
+            tiles,
+            w,
+            h,
+            direction,
+            rng,
+            noise,
+            tile="sand",
+            width_scale=0.9,
+            probability=1.0,
+            allowed_sources={"grass", "snow"},
+        )
 
     elif neighbor_biome == Biome.TUNDRA:
-        _transition_scatter(tiles, w, h, direction, rng, noise,
-                            tile='snow', width_scale=0.9, probability=1.0,
-                            allowed_sources={'grass', 'sand'})
+        _transition_scatter(
+            tiles,
+            w,
+            h,
+            direction,
+            rng,
+            noise,
+            tile="snow",
+            width_scale=0.9,
+            probability=1.0,
+            allowed_sources={"grass", "sand"},
+        )
 
     elif neighbor_biome == Biome.FOREST:
-        _transition_scatter(tiles, w, h, direction, rng, noise,
-                            tile='tree', width_scale=0.6, probability=0.4,
-                            allowed_sources={'grass', 'sand', 'snow'})
+        _transition_scatter(
+            tiles,
+            w,
+            h,
+            direction,
+            rng,
+            noise,
+            tile="tree",
+            width_scale=0.6,
+            probability=0.4,
+            allowed_sources={"grass", "sand", "snow"},
+        )
 
     elif neighbor_biome == Biome.PLAINS:
         # Равнины — самый мягкий переход: редкие пятна травы
-        _transition_scatter(tiles, w, h, direction, rng, noise,
-                            tile='grass', width_scale=0.4, probability=0.25,
-                            allowed_sources={'sand', 'snow', 'rock'})
+        _transition_scatter(
+            tiles,
+            w,
+            h,
+            direction,
+            rng,
+            noise,
+            tile="grass",
+            width_scale=0.4,
+            probability=0.25,
+            allowed_sources={"sand", "snow", "rock"},
+        )
 
 
 FILLERS = {
-    Biome.PLAINS:   [("grass", 0.90), ("tree", 0.08), ("rock", 0.02)],
-    Biome.FOREST:   [("grass", 0.55), ("tree", 0.40), ("rock", 0.05)],
-    Biome.DESERT:   [("sand",  0.80), ("cactus", 0.15), ("rock", 0.05)],
-    Biome.TUNDRA:   [("snow",  0.75), ("rock", 0.20), ("tree", 0.05)],
-    Biome.MOUNTAIN: [("rock",  0.95), ("snow", 0.05)],
-    Biome.OCEAN:    [("water", 1.0)],
+    Biome.PLAINS: [("grass", 0.90), ("tree", 0.08), ("rock", 0.02)],
+    Biome.FOREST: [("grass", 0.55), ("tree", 0.40), ("rock", 0.05)],
+    Biome.DESERT: [("sand", 0.80), ("cactus", 0.15), ("rock", 0.05)],
+    Biome.TUNDRA: [("snow", 0.75), ("rock", 0.20), ("tree", 0.05)],
+    Biome.MOUNTAIN: [("rock", 0.95), ("snow", 0.05)],
+    Biome.OCEAN: [("water", 1.0)],
 }
 
 
 def generate_local_map(biome: Biome, seed: int, neighbors=None) -> LocalMap:
     rng = random.Random(seed)
-    noise = ValueNoise(seed + 7777)      # отдельный шум для границ
+    noise = ValueNoise(seed + 7777)  # отдельный шум для границ
     w, h = LOCAL_W, LOCAL_H
 
     weights = FILLERS[biome]
-    ids   = [t for t, _ in weights]
+    ids = [t for t, _ in weights]
     probs = [p for _, p in weights]
 
     tiles = [rng.choices(ids, weights=probs, k=w) for _ in range(h)]

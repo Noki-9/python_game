@@ -1,5 +1,6 @@
-import pygame as pg
 from random import randint
+
+import pygame as pg
 
 from core.config import clock, screen
 from core.scene_manager import SceneManager
