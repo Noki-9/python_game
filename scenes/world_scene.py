@@ -1,14 +1,13 @@
 import pygame as pg
 
 from core.camera import Camera
-from core.config import screen
+from core.config import VISION_RADIUS, screen
 from core.scene_manager import Scene
 from world.biome import Biome
 
 SEG_SIZE = 16
 CAM_PAN_SPEED = 600
 
-# Стоимость шага по биому НАЗНАЧЕНИЯ
 BIOME_MOVE_COST = {
     Biome.PLAINS: 1,
     Biome.FOREST: 2,
@@ -43,6 +42,9 @@ class WorldScene(Scene):
 
         if world_pos is not None:
             self.gx, self.gy = world_pos
+        else:
+            self.gx = world.start_gx
+            self.gy = world.start_gy
 
         sw, sh = screen.get_size()
         self.camera = Camera(sw, sh)
@@ -51,9 +53,13 @@ class WorldScene(Scene):
 
         self.hover_seg = None
         self.hover_valid = False
+
+        self._font_hint = pg.font.SysFont(None, 22)
+        self._font_small = pg.font.SysFont(None, 16)
+
         self._ensure_prerender()
 
-    # ---- Позиция как свойства → синхронизируется с state ----
+    # ---- Позиция через state ----
     @property
     def gx(self):
         return self.state.gx
@@ -101,7 +107,6 @@ class WorldScene(Scene):
                 nbr_walk = nbr.biome.walkable
 
                 if seg_walk and not nbr_walk:
-                    # Проходимый рядом с непроходимым — размываем СВОЮ сторону
                     self._draw_edge_dither(
                         surf,
                         gx,
@@ -112,7 +117,7 @@ class WorldScene(Scene):
                         max_thickness=6,
                     )
                 elif not seg_walk and nbr_walk:
-                    continue  # сосед размоет себя сам
+                    continue
                 else:
                     self._draw_edge_dither(
                         surf, gx, gy, direction, seg.biome.color, nbr.biome.color
@@ -151,28 +156,33 @@ class WorldScene(Scene):
                     (sx + SEG_SIZE - thickness, sy + i * 2, thickness, 2),
                 )
 
+    # ---------------- Туман войны ----------------
+    def _update_explored(self):
+        r = VISION_RADIUS
+        r2 = r * r
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                if dx * dx + dy * dy > r2:
+                    continue
+                seg = self.world.get(self.gx + dx, self.gy + dy)
+                if seg is not None:
+                    seg.explored = True
+
     # ---------------- Жизненный цикл ----------------
     def on_enter(self, world_pos=None, mode=None):
         if mode is not None:
             self.mode = mode
         if world_pos is not None:
             self.gx, self.gy = world_pos
+            self._update_explored()
         elif self.mode == "spawn":
-            self.gx, self.gy = self._find_start_near_center()
-            self.state.restore()  # старт — полные силы
+            self.gx = self.world.start_gx
+            self.gy = self.world.start_gy
+        else:
+            self.gx = self.world.start_gx
+            self.gy = self.world.start_gy
+            self._update_explored()
         self._center_camera()
-
-    def _find_start_near_center(self):
-        cx, cy = self.world.width // 2, self.world.height // 2
-        for r in range(max(self.world.width, self.world.height)):
-            for dy in range(-r, r + 1):
-                for dx in range(-r, r + 1):
-                    if max(abs(dx), abs(dy)) != r:
-                        continue
-                    seg = self.world.get(cx + dx, cy + dy)
-                    if seg and seg.biome.walkable:
-                        return cx + dx, cy + dy
-        return cx, cy
 
     def _center_camera(self):
         cx = self.gx * SEG_SIZE + SEG_SIZE / 2
@@ -214,7 +224,6 @@ class WorldScene(Scene):
         if dx or dy:
             self._try_step(dx, dy)
 
-        # Enter работает всегда — даже при нулевой выносливости
         if event.key == pg.K_RETURN:
             seg = self.world.get(self.gx, self.gy)
             if seg and seg.biome.walkable:
@@ -229,9 +238,10 @@ class WorldScene(Scene):
             return
         cost = self._move_cost(dx, dy)
         if not self.state.spend(cost):
-            return  # не хватает выносливости
+            return
         self.gx += dx
         self.gy += dy
+        self._update_explored()
         self._center_camera()
 
     def _try_pick_segment(self, screen_pos):
@@ -239,16 +249,15 @@ class WorldScene(Scene):
         if gx is None:
             return
         self.gx, self.gy = gx, gy
-        self.state.restore()  # точка старта — всегда с силами
+        self.state.restore()
         self.mode = "play"
+        self._update_explored()
         self._center_camera()
 
     def _screen_to_segment(self, screen_pos):
         sx, sy = screen_pos
-        wx = sx + self.camera.x
-        wy = sy + self.camera.y
-        gx = int(wx // SEG_SIZE)
-        gy = int(wy // SEG_SIZE)
+        gx = int((sx + self.camera.x) // SEG_SIZE)
+        gy = int((sy + self.camera.y) // SEG_SIZE)
         seg = self.world.get(gx, gy)
         if seg is None or not seg.biome.walkable:
             return None, None
@@ -268,7 +277,6 @@ class WorldScene(Scene):
     def update(self, dt):
         if self.mode != "spawn":
             return
-
         keys = pg.key.get_pressed()
         pan_x = pan_y = 0
         if keys[pg.K_w]:
@@ -311,26 +319,8 @@ class WorldScene(Scene):
             (cam_x, cam_y, self.camera.view_w, self.camera.view_h),
         )
 
-        # Разведанные — обводка
-        tx0 = max(0, int(cam_x // SEG_SIZE) - 1)
-        ty0 = max(0, int(cam_y // SEG_SIZE) - 1)
-        tx1 = min(self.world.width, int((cam_x + self.camera.view_w) // SEG_SIZE) + 2)
-        ty1 = min(self.world.height, int((cam_y + self.camera.view_h) // SEG_SIZE) + 2)
-        for gy in range(ty0, ty1):
-            for gx in range(tx0, tx1):
-                seg = self.world.segments.get((gx, gy))
-                if seg and seg.explored:
-                    pg.draw.rect(
-                        screen,
-                        (255, 255, 0),
-                        (
-                            gx * SEG_SIZE - cam_x,
-                            gy * SEG_SIZE - cam_y,
-                            SEG_SIZE - 1,
-                            SEG_SIZE - 1,
-                        ),
-                        1,
-                    )
+        self._draw_fog(screen, cam_x, cam_y)
+        self._draw_pois(screen, cam_x, cam_y)
 
         if self.mode == "spawn":
             self._draw_hover(screen, cam_x, cam_y)
@@ -339,6 +329,46 @@ class WorldScene(Scene):
 
         self._draw_stamina(screen)
         self._draw_hint(screen)
+
+    def _draw_fog(self, screen, cam_x, cam_y):
+        if self.mode == "spawn":
+            return
+        tx0, ty0, tx1, ty1 = self.camera.visible_tile_range(SEG_SIZE)
+        tx1 = min(tx1, self.world.width)
+        ty1 = min(ty1, self.world.height)
+        for gy in range(ty0, ty1):
+            for gx in range(tx0, tx1):
+                seg = self.world.segments.get((gx, gy))
+                if seg is None or seg.explored:
+                    continue
+                sx = gx * SEG_SIZE - cam_x
+                sy = gy * SEG_SIZE - cam_y
+                pg.draw.rect(screen, (8, 8, 12), (sx, sy, SEG_SIZE, SEG_SIZE))
+
+    def _is_poi_visible(self, poi):
+        if self.mode == "spawn":
+            return True
+        seg = self.world.get(poi.gx, poi.gy)
+        return seg is not None and seg.explored
+
+    def _draw_pois(self, screen, cam_x, cam_y):
+        for poi in self.world.pois:
+            if not self._is_poi_visible(poi):
+                continue
+            sx = poi.gx * SEG_SIZE - cam_x
+            sy = poi.gy * SEG_SIZE - cam_y
+            if (
+                sx < -SEG_SIZE
+                or sy < -SEG_SIZE
+                or sx > self.camera.view_w
+                or sy > self.camera.view_h
+            ):
+                continue
+
+            color = (100, 100, 100) if poi.cleared else poi.icon_color
+            center = (sx + SEG_SIZE // 2, sy + SEG_SIZE // 2)
+            pg.draw.circle(screen, color, center, 6)
+            pg.draw.circle(screen, (20, 20, 20), center, 6, 1)
 
     def _draw_hover(self, screen, cam_x, cam_y):
         if self.hover_seg is None:
@@ -349,10 +379,15 @@ class WorldScene(Scene):
         color = (255, 255, 255) if self.hover_valid else (200, 60, 60)
         pg.draw.rect(screen, color, (sx, sy, SEG_SIZE, SEG_SIZE), 2)
 
+        if self.hover_valid:
+            poi = self.world.poi_at(hx, hy)
+            if poi:
+                surf = self._font_small.render(poi.name, True, (255, 255, 200))
+                screen.blit(surf, (sx, sy - 18))
+
     def _draw_player(self, screen, cam_x, cam_y):
         px = self.gx * SEG_SIZE - cam_x
         py = self.gy * SEG_SIZE - cam_y
-        # Если сил нет — маркер тускнеет
         color = (255, 60, 60) if self.state.stamina > 0 else (120, 40, 40)
         pg.draw.rect(screen, color, (px, py, SEG_SIZE, SEG_SIZE))
 
@@ -368,13 +403,11 @@ class WorldScene(Scene):
             pg.draw.rect(screen, color, (x + 2, y + 2, fill_w, bar_h - 4))
         pg.draw.rect(screen, (240, 240, 240), (x, y, bar_w, bar_h), 2)
 
-        font = pg.font.SysFont(None, 18)
         text = f"Выносливость: {s.stamina}/{s.max_stamina}"
-        surf = font.render(text, True, (255, 255, 255))
+        surf = self._font_small.render(text, True, (255, 255, 255))
         screen.blit(surf, (x + bar_w + 8, y + 3))
 
     def _draw_hint(self, screen):
-        font = pg.font.SysFont(None, 22)
         if self.mode == "spawn":
             text = "ЛКМ / Enter — выбрать старт  |  WASD — панорама"
         elif self.state.stamina > 0:
@@ -382,7 +415,7 @@ class WorldScene(Scene):
         else:
             text = "Нет сил идти — Enter, чтобы отдохнуть в локации"
 
-        surf = font.render(text, True, (230, 230, 230))
+        surf = self._font_hint.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)
         bg.fill((0, 0, 0))

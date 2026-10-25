@@ -3,20 +3,22 @@ import random
 from core.config import CHUNK_SIZE, LOCAL_H, LOCAL_W, TILE_SIZE
 from core.noise import ValueNoise
 from world.biome import Biome
+from world.location_type import LocationType
 
-WALL_TILES = {"water", "rock", "tree", "cactus"}
+WALL_TILES = {"water", "rock", "tree", "cactus", "house_wall"}
 
-TRANSITION_WIDTH = 12  # макс. ширина переходной полосы
-WATER_DEPTH = 3  # минимум воды у самого края
-NOISE_AMPLITUDE = 6  # насколько шум сдвигает границу (±6 тайлов)
+TRANSITION_WIDTH = 12
+WATER_DEPTH = 3
+NOISE_AMPLITUDE = 6
 
 
 class LocalMap:
-    def __init__(self, width, height, biome, tiles):
+    def __init__(self, width, height, biome, tiles, spawn_tile):
         self.width = width
         self.height = height
         self.biome = biome
         self.tiles = tiles
+        self.spawn_tile = spawn_tile
         self.walls_by_chunk = {}
         self._build_walls_index()
 
@@ -36,7 +38,7 @@ class LocalMap:
             return False
         return self.tiles[ty][tx] not in WALL_TILES
 
-    def walls_near(self, px: float, py: float, radius_px: int = 128) -> list:
+    def walls_near(self, px, py, radius_px=128):
         cx0 = int((px - radius_px) // (CHUNK_SIZE * TILE_SIZE))
         cy0 = int((py - radius_px) // (CHUNK_SIZE * TILE_SIZE))
         cx1 = int((px + radius_px) // (CHUNK_SIZE * TILE_SIZE))
@@ -50,10 +52,9 @@ class LocalMap:
         return result
 
 
-# --- Утилиты границы ---
+# ---------- Переходы биомов ----------
 
 _DIR_OFFSET = {"n": 0.0, "s": 500.0, "w": 1000.0, "e": 1500.0}
-_DIR_NEIGHBOR = {"n": (0, -1), "s": (0, 1), "w": (-1, 0), "e": (1, 0)}
 
 
 def _distance_to_edge(x, y, w, h, direction):
@@ -69,7 +70,6 @@ def _distance_to_edge(x, y, w, h, direction):
 
 
 def _edge_ranges(direction, w, h, max_depth):
-    """Диапазоны (ys, xs) — только клетки в полосе у нужного края."""
     max_depth = int(max_depth) + 2
     if direction == "n":
         return range(min(h, max_depth)), range(w)
@@ -83,21 +83,15 @@ def _edge_ranges(direction, w, h, max_depth):
 
 
 def _noisy_distance(x, y, w, h, direction, noise):
-    """Расстояние до края + шум — граница становится «живой»."""
     d = _distance_to_edge(x, y, w, h, direction)
     off = _DIR_OFFSET[direction]
     n = noise.fbm(x * 0.12 + off, y * 0.12 + off, octaves=4)
     return d + (n - 0.5) * NOISE_AMPLITUDE * 2
 
 
-# --- Обработчики переходов ---
-
-
 def _transition_ocean(tiles, w, h, direction, rng, noise):
     max_depth = TRANSITION_WIDTH + NOISE_AMPLITUDE + 2
     ys, xs = _edge_ranges(direction, w, h, max_depth)
-
-    # Вода + песок
     for y in ys:
         for x in xs:
             nd = _noisy_distance(x, y, w, h, direction, noise)
@@ -106,8 +100,6 @@ def _transition_ocean(tiles, w, h, direction, rng, noise):
             elif nd < TRANSITION_WIDTH:
                 if tiles[y][x] not in ("water", "rock"):
                     tiles[y][x] = "sand"
-
-    # Разбросанные камни на пляже
     for y in ys:
         for x in xs:
             if tiles[y][x] == "sand" and rng.random() < 0.04:
@@ -117,11 +109,9 @@ def _transition_ocean(tiles, w, h, direction, rng, noise):
 def _transition_scatter(
     tiles, w, h, direction, rng, noise, tile, width_scale, probability, allowed_sources
 ):
-    """Общий случай: разбрасывает tile с шумной шириной."""
     max_depth = (TRANSITION_WIDTH * width_scale) + NOISE_AMPLITUDE + 2
     ys, xs = _edge_ranges(direction, w, h, max_depth)
     limit = TRANSITION_WIDTH * width_scale
-
     for y in ys:
         for x in xs:
             nd = _noisy_distance(x, y, w, h, direction, noise)
@@ -131,10 +121,8 @@ def _transition_scatter(
 
 
 def _apply_transition(tiles, w, h, direction, neighbor_biome, rng, noise):
-    """Выбирает стиль перехода под биом-соседа."""
     if neighbor_biome == Biome.OCEAN:
         _transition_ocean(tiles, w, h, direction, rng, noise)
-
     elif neighbor_biome == Biome.MOUNTAIN:
         _transition_scatter(
             tiles,
@@ -143,40 +131,19 @@ def _apply_transition(tiles, w, h, direction, neighbor_biome, rng, noise):
             direction,
             rng,
             noise,
-            tile="rock",
-            width_scale=0.7,
-            probability=0.85,
-            allowed_sources={"grass", "sand", "snow", "tree"},
+            "rock",
+            0.7,
+            0.85,
+            {"grass", "sand", "snow", "tree"},
         )
-
     elif neighbor_biome == Biome.DESERT:
         _transition_scatter(
-            tiles,
-            w,
-            h,
-            direction,
-            rng,
-            noise,
-            tile="sand",
-            width_scale=0.9,
-            probability=1.0,
-            allowed_sources={"grass", "snow"},
+            tiles, w, h, direction, rng, noise, "sand", 0.9, 1.0, {"grass", "snow"}
         )
-
     elif neighbor_biome == Biome.TUNDRA:
         _transition_scatter(
-            tiles,
-            w,
-            h,
-            direction,
-            rng,
-            noise,
-            tile="snow",
-            width_scale=0.9,
-            probability=1.0,
-            allowed_sources={"grass", "sand"},
+            tiles, w, h, direction, rng, noise, "snow", 0.9, 1.0, {"grass", "sand"}
         )
-
     elif neighbor_biome == Biome.FOREST:
         _transition_scatter(
             tiles,
@@ -185,14 +152,12 @@ def _apply_transition(tiles, w, h, direction, neighbor_biome, rng, noise):
             direction,
             rng,
             noise,
-            tile="tree",
-            width_scale=0.6,
-            probability=0.4,
-            allowed_sources={"grass", "sand", "snow"},
+            "tree",
+            0.6,
+            0.4,
+            {"grass", "sand", "snow"},
         )
-
     elif neighbor_biome == Biome.PLAINS:
-        # Равнины — самый мягкий переход: редкие пятна травы
         _transition_scatter(
             tiles,
             w,
@@ -200,10 +165,10 @@ def _apply_transition(tiles, w, h, direction, neighbor_biome, rng, noise):
             direction,
             rng,
             noise,
-            tile="grass",
-            width_scale=0.4,
-            probability=0.25,
-            allowed_sources={"sand", "snow", "rock"},
+            "grass",
+            0.4,
+            0.25,
+            {"sand", "snow", "rock"},
         )
 
 
@@ -217,9 +182,117 @@ FILLERS = {
 }
 
 
-def generate_local_map(biome: Biome, seed: int, neighbors=None) -> LocalMap:
-    rng = random.Random(seed)
-    noise = ValueNoise(seed + 7777)  # отдельный шум для границ
+# ---------- Генерация локаций по типу ----------
+
+
+def _apply_village(tiles, w, h, rng):
+    cx, cy = w // 2, h // 2
+    plaza_r = 12
+
+    # Площадь
+    for dy in range(-plaza_r, plaza_r + 1):
+        for dx in range(-plaza_r, plaza_r + 1):
+            x, y = cx + dx, cy + dy
+            if 0 <= x < w and 0 <= y < h:
+                tiles[y][x] = "grass"
+
+    # Дороги-крест
+    for i in range(-45, 46):
+        x = cx + i
+        if 0 <= x < w:
+            tiles[cy][x] = "road"
+        y = cy + i
+        if 0 <= y < h:
+            tiles[y][cx] = "road"
+
+    # Дома — в квадрантах (не пересекают площадь и дороги)
+    houses = []
+    attempts = 0
+    while len(houses) < 7 and attempts < 120:
+        attempts += 1
+        hw = rng.randint(5, 8)
+        hh = rng.randint(4, 6)
+        hx = rng.randint(3, w - hw - 3)
+        hy = rng.randint(3, h - hh - 3)
+
+        # Не пересекается с площадью
+        if (
+            hx <= cx + plaza_r + 2
+            and hx + hw >= cx - plaza_r - 2
+            and hy <= cy + plaza_r + 2
+            and hy + hh >= cy - plaza_r - 2
+        ):
+            continue
+
+        # Не пересекает дороги
+        if hx <= cx <= hx + hw:
+            continue
+        if hy <= cy <= hy + hh:
+            continue
+
+        # Не пересекается с другим домом (мин. зазор 2 тайла)
+        overlap = False
+        for ox, oy, ow, oh in houses:
+            if not (
+                hx + hw + 2 < ox
+                or ox + ow + 2 < hx
+                or hy + hh + 2 < oy
+                or oy + oh + 2 < hy
+            ):
+                overlap = True
+                break
+        if overlap:
+            continue
+
+        # Строим
+        for dy in range(hh):
+            for dx in range(hw):
+                if dy in (0, hh - 1) or dx in (0, hw - 1):
+                    tiles[hy + dy][hx + dx] = "house_wall"
+                else:
+                    tiles[hy + dy][hx + dx] = "house_floor"
+        door_x = hx + hw // 2
+        tiles[hy + hh - 1][door_x] = "door"
+        houses.append((hx, hy, hw, hh))
+
+
+def _apply_quest_site(tiles, w, h, rng):
+    cx, cy = w // 2, h // 2
+    radius = 20
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            x, y = cx + dx, cy + dy
+            if not (0 <= x < w and 0 <= y < h):
+                continue
+            d2 = dx * dx + dy * dy
+            if d2 < 100 or d2 < radius * radius and rng.random() < 0.4:
+                tiles[y][x] = "stone"
+
+
+def _find_spawn_near(tiles, cx, cy, w, h, ground, max_r=60):
+    for r in range(max_r):
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                if max(abs(dx), abs(dy)) != r:
+                    continue
+                x, y = cx + dx, cy + dy
+                if 0 <= x < w and 0 <= y < h:
+                    if tiles[y][x] not in WALL_TILES:
+                        return (x, y)
+    # Крайний случай — расчищаем центр
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            x, y = cx + dx, cy + dy
+            if 0 <= x < w and 0 <= y < h:
+                tiles[y][x] = ground
+    return (cx, cy)
+
+
+def generate_local_map(
+    biome, seed, neighbors=None, location_type=LocationType.WILD, player_state=None
+):
+    rng = random.Random(seed + 7919)
+    noise = ValueNoise(seed + 7777)
     w, h = LOCAL_W, LOCAL_H
 
     weights = FILLERS[biome]
@@ -228,18 +301,29 @@ def generate_local_map(biome: Biome, seed: int, neighbors=None) -> LocalMap:
 
     tiles = [rng.choices(ids, weights=probs, k=w) for _ in range(h)]
 
-    # Переходы для каждого соседа
+    # Переходы биомов
     if neighbors and biome != Biome.OCEAN:
         for direction, nbr_biome in neighbors.items():
             if nbr_biome is None or nbr_biome == biome:
                 continue
             _apply_transition(tiles, w, h, direction, nbr_biome, rng, noise)
 
-    # Пятачок спавна — обязательно ПОСЛЕ переходов
     cx, cy = w // 2, h // 2
     ground = "sand" if biome == Biome.OCEAN else "grass"
-    for dy in range(-3, 4):
-        for dx in range(-3, 4):
-            tiles[cy + dy][cx + dx] = ground
 
-    return LocalMap(w, h, biome, tiles)
+    # Тип локации
+    if location_type.is_settlement:
+        _apply_village(tiles, w, h, rng)
+        spawn_tx, spawn_ty = cx, cy
+    elif location_type.is_quest:
+        _apply_quest_site(tiles, w, h, rng)
+        spawn_tx, spawn_ty = cx, cy + 15
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                x, y = spawn_tx + dx, spawn_ty + dy
+                if 0 <= x < w and 0 <= y < h:
+                    tiles[y][x] = "stone"
+    else:
+        spawn_tx, spawn_ty = _find_spawn_near(tiles, cx, cy, w, h, ground)
+
+    return LocalMap(w, h, biome, tiles, (spawn_tx, spawn_ty))

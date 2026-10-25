@@ -1,9 +1,14 @@
+import math
+import random
+
 import pygame as pg
 
 from core.camera import Camera
 from core.config import TILE_SIZE, screen
 from core.scene_manager import Scene
 from models.player import Player
+from world.loot import GOLD, ITEMS_REGISTRY
+from world.spawn import spawn_animals, spawn_enemies
 
 COLORS = {
     "grass": (100, 180, 90),
@@ -13,7 +18,14 @@ COLORS = {
     "rock": (110, 100, 90),
     "tree": (50, 120, 60),
     "cactus": (70, 140, 80),
+    "road": (170, 150, 110),
+    "door": (130, 90, 60),
+    "house_wall": (120, 100, 80),
+    "house_floor": (160, 130, 100),
+    "stone": (150, 150, 160),
 }
+
+PICKUP_RADIUS = 44
 
 
 class LocalScene(Scene):
@@ -22,10 +34,17 @@ class LocalScene(Scene):
         self.segment = segment
         self.map = None
         self.player = None
+        self.enemies = []
+        self.animals = []
+        self.dropped_items = []  # [(item_id, count, x, y), ...]
         self.return_pos = None
+        self.notifications = []
+
+        self._font_hint = pg.font.SysFont(None, 22)
+        self._font_label = pg.font.SysFont(None, 24)
+        self._font_hud = pg.font.SysFont(None, 18)
 
     def _get_neighbors(self):
-        """Биомы четырёх соседей текущего сегмента."""
         world = getattr(self.manager, "world", None)
         if world is None:
             return None
@@ -43,34 +62,144 @@ class LocalScene(Scene):
 
     def on_enter(self, return_pos=None, entry_from=None):
         self.return_pos = return_pos
+        self.notifications = []
+        self.dropped_items = []
 
-        # Восстанавливаем выносливость при заходе в локацию
-        if hasattr(self.manager, "player_state"):
-            self.manager.player_state.restore()
+        state = self.manager.player_state
+        state.restore()
 
         neighbors = self._get_neighbors()
-        self.map = self.segment.get_local_map(neighbors=neighbors)
+        self.map = self.segment.get_local_map(
+            neighbors=neighbors,
+            player_state=state,
+        )
 
-        cx = (self.map.width // 2) * TILE_SIZE
-        cy = (self.map.height // 2) * TILE_SIZE
-        self.player = Player(cx, cy, TILE_SIZE - 8, TILE_SIZE - 8, 100, 300, "blue")
+        tx, ty = self.map.spawn_tile
+        px = tx * TILE_SIZE
+        py = ty * TILE_SIZE
+        self.player = Player(
+            px, py, TILE_SIZE - 8, TILE_SIZE - 8, 100, 300, "blue", state=state
+        )
 
         sw, sh = screen.get_size()
         self.camera = Camera(sw, sh)
         self.map_w_px = self.map.width * TILE_SIZE
         self.map_h_px = self.map.height * TILE_SIZE
 
-    def handle_event(self, event):
-        if event.type == pg.KEYDOWN and event.key == pg.K_ESCAPE:
-            from scenes.world_scene import WorldScene
-
-            self.manager.switch(
-                WorldScene(self.manager, self.manager.world),
-                world_pos=self.return_pos,
-                mode="play",
+        # Спавн существ
+        if not self.segment.cleared:
+            self.enemies = spawn_enemies(
+                self.map,
+                self.segment.biome,
+                self.segment.location_type,
+                self.segment.seed,
+                level=state.level,
             )
+        else:
+            self.enemies = []
 
+        self.animals = spawn_animals(
+            self.map,
+            self.segment.biome,
+            self.segment.location_type,
+            self.segment.seed,
+        )
+
+        if self.segment.cleared:
+            self.notifications.append(("Локация уже зачищена", 3.0))
+
+    def on_exit(self):
+        self.segment.reset_if_unfinished()
+
+    # ---------- Ввод ----------
+    def handle_event(self, event):
+        if event.type == pg.KEYDOWN:
+            if event.key == pg.K_ESCAPE:
+                from scenes.world_scene import WorldScene
+
+                self.manager.switch(
+                    WorldScene(self.manager, self.manager.world),
+                    world_pos=self.return_pos,
+                    mode="play",
+                )
+            elif event.key == pg.K_e:
+                self._try_interact()
+            elif event.key == pg.K_SPACE:
+                self._player_attack()
+
+        elif event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
+            self._player_attack()
+
+    def _try_interact(self):
+        if not self.segment.location_type.is_quest:
+            return
+        if self.segment.cleared:
+            return
+        cx = (self.map.width // 2) * TILE_SIZE
+        cy = (self.map.height // 2) * TILE_SIZE
+        px = self.player.x + self.player.rect_x / 2
+        py = self.player.y + self.player.rect_y / 2
+        dist2 = (px - cx) ** 2 + (py - cy) ** 2
+        if dist2 < (TILE_SIZE * 3) ** 2:
+            self._complete_quest()
+
+    def _player_attack(self):
+        targets = [e for e in self.enemies if e.is_alive()] + [
+            a for a in self.animals if a.is_alive()
+        ]
+        result = self.player.try_attack(targets)
+        if result is None:
+            return
+        killed, target = result
+        if killed:
+            self._on_enemy_killed(target)
+
+    def _on_enemy_killed(self, enemy):
+        state = self.manager.player_state
+
+        # Лут
+        rng = random.Random(enemy.loot_rng_seed)
+        loot = enemy.drop_loot(rng)
+        for item_id, count in loot.items():
+            self.dropped_items.append((item_id, count, enemy.x, enemy.y))
+
+        # XP
+        state.add_xp(enemy.xp_reward)
+        self.notifications.append((f"+{enemy.xp_reward} XP", 1.5))
+
+        # Проверка зачистки квестовой локации
+        self._check_quest_completion()
+
+    def _check_quest_completion(self):
+        if not self.segment.location_type.is_quest:
+            return
+        if self.segment.cleared:
+            return
+        if not self.enemies:
+            return
+        if any(e.is_alive() for e in self.enemies):
+            return
+        self._complete_quest()
+
+    def _complete_quest(self):
+        if self.segment.cleared:
+            return
+        self.segment.cleared = True
+        if self.segment.poi:
+            self.segment.poi.cleared = True
+
+        state = self.manager.player_state
+        state.add_gold(100)
+        state.add_xp(250)
+        self.notifications.append(("Локация зачищена! +100 золота, +250 XP", 4.0))
+
+    # ---------- Update ----------
     def update(self, dt):
+        if not self.player.is_alive():
+            self._on_player_death()
+            return
+
+        # Игрок
         nearby = self.map.walls_near(
             self.player.x + self.player.rect_x / 2,
             self.player.y + self.player.rect_y / 2,
@@ -81,8 +210,77 @@ class LocalScene(Scene):
         )
         self.camera.follow(self.player, self.map_w_px, self.map_h_px)
 
+        # Враги
+        for e in self.enemies:
+            if not e.is_alive():
+                continue
+            walls = self.map.walls_near(
+                e.x + e.rect_x / 2,
+                e.y + e.rect_y / 2,
+                radius_px=64,
+            )
+            e.update(dt, self.player, walls)
+
+        # Животные
+        for a in self.animals:
+            if not a.is_alive():
+                continue
+            walls = self.map.walls_near(
+                a.x + a.rect_x / 2,
+                a.y + a.rect_y / 2,
+                radius_px=64,
+            )
+            a.update(dt, self.player, walls)
+
+        # Сбор дропов
+        self._collect_drops()
+
+        # Проверка: игрок мог умереть от атак
+        if not self.player.is_alive():
+            self._on_player_death()
+            return
+
+        self.notifications = [
+            (txt, t - dt) for txt, t in self.notifications if t - dt > 0
+        ]
+
+    def _collect_drops(self):
+        state = self.manager.player_state
+        remaining = []
+        for item_id, count, x, y in self.dropped_items:
+            dx = self.player.x - x
+            dy = self.player.y - y
+            if math.hypot(dx, dy) < PICKUP_RADIUS:
+                if item_id == GOLD:
+                    state.add_gold(count)
+                else:
+                    state.add_item(item_id, count)
+                self.notifications.append((f"+{count} {item_id}", 1.5))
+            else:
+                remaining.append((item_id, count, x, y))
+        self.dropped_items = remaining
+
+    def _on_player_death(self):
+        state = self.manager.player_state
+        # Потеря 20% золота
+        lost = state.gold // 5
+        state.gold -= lost
+        state.hp = state.max_hp
+        state.restore()
+
+        from scenes.world_scene import WorldScene
+
+        # Возрождение на стартовой деревне
+        self.manager.switch(
+            WorldScene(self.manager, self.manager.world),
+            world_pos=(self.manager.world.start_gx, self.manager.world.start_gy),
+            mode="play",
+        )
+
+    # ---------- Draw ----------
     def draw(self, screen):
         screen.fill((20, 20, 20))
+
         tx0, ty0, tx1, ty1 = self.camera.visible_tile_range(TILE_SIZE)
         tx1 = min(tx1, self.map.width)
         ty1 = min(ty1, self.map.height)
@@ -93,11 +291,111 @@ class LocalScene(Scene):
             sy = ty * TILE_SIZE - int(self.camera.y)
             for tx in range(tx0, tx1):
                 sx = tx * TILE_SIZE - int(self.camera.x)
-                pg.draw.rect(screen, COLORS[row[tx]], (sx, sy, TILE_SIZE, TILE_SIZE))
+                color = COLORS.get(row[tx], (255, 0, 255))
+                pg.draw.rect(screen, color, (sx, sy, TILE_SIZE, TILE_SIZE))
 
+        self._draw_quest_marker(screen)
+
+        # Существа
+        for a in self.animals:
+            if a.is_alive():
+                a.draw(screen, self.camera)
+        for e in self.enemies:
+            if e.is_alive():
+                e.draw(screen, self.camera)
+
+        # Дропы
+        for item_id, count, x, y in self.dropped_items:
+            sx, sy = self.camera.apply(x + 12, y + 12)
+            item = ITEMS_REGISTRY.get(item_id)
+            color = item.color if item else (255, 255, 255)
+            pg.draw.circle(screen, color, (sx, sy), 5)
+            pg.draw.circle(screen, (20, 20, 20), (sx, sy), 5, 1)
+
+        # Игрок
         px, py = self.camera.apply(self.player.x, self.player.y)
         pg.draw.rect(
             screen,
             self.player.texture,
             (px, py, self.player.rect_x, self.player.rect_y),
         )
+
+        self._draw_label(screen)
+        self._draw_hud(screen)
+        self._draw_notifications(screen)
+        self._draw_hint(screen)
+
+    def _draw_quest_marker(self, screen):
+        if not self.segment.location_type.is_quest:
+            return
+        cx = (self.map.width // 2) * TILE_SIZE
+        cy = (self.map.height // 2) * TILE_SIZE
+        sx, sy = self.camera.apply(cx, cy)
+        color = (100, 100, 100) if self.segment.cleared else (230, 200, 80)
+        center = (sx + TILE_SIZE // 2, sy + TILE_SIZE // 2)
+        pg.draw.circle(screen, color, center, 22, 2)
+        pg.draw.circle(screen, color, center, 8)
+
+    def _draw_label(self, screen):
+        text = self.segment.location_type.display_name
+        if self.segment.poi:
+            text = f"{self.segment.poi.name} — {text}"
+        surf = self._font_label.render(text, True, (240, 240, 240))
+        bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
+        bg.set_alpha(160)
+        bg.fill((0, 0, 0))
+        screen.blit(bg, (10, 10))
+        screen.blit(surf, (18, 14))
+
+    def _draw_hud(self, screen):
+        s = self.manager.player_state
+        y = 50
+
+        # HP
+        self._bar(screen, 10, y, 200, 16, s.hp_ratio, (220, 60, 60))
+        surf = self._font_hud.render(f"HP: {s.hp}/{s.max_hp}", True, (255, 255, 255))
+        screen.blit(surf, (216, y - 1))
+
+        # XP
+        y += 20
+        xp_ratio = s.xp / s.xp_to_next if s.xp_to_next else 0
+        self._bar(screen, 10, y, 200, 14, xp_ratio, (90, 180, 230))
+        surf = self._font_hud.render(
+            f"XP: {s.xp}/{s.xp_to_next}  Ур. {s.level}", True, (255, 255, 255)
+        )
+        screen.blit(surf, (216, y - 1))
+
+        # Золото
+        y += 18
+        surf = self._font_hud.render(f"Золото: {s.gold}", True, (240, 220, 100))
+        screen.blit(surf, (10, y))
+
+    def _bar(self, screen, x, y, w, h, ratio, color):
+        pg.draw.rect(screen, (30, 30, 30), (x, y, w, h))
+        fill = int((w - 4) * max(0.0, min(1.0, ratio)))
+        if fill > 0:
+            pg.draw.rect(screen, color, (x + 2, y + 2, fill, h - 4))
+        pg.draw.rect(screen, (200, 200, 200), (x, y, w, h), 1)
+
+    def _draw_notifications(self, screen):
+        y = 110
+        for txt, t in self.notifications:
+            alpha = 255 if t >= 1.0 else int(255 * t)
+            surf = self._font_hint.render(txt, True, (255, 240, 100))
+            surf.set_alpha(alpha)
+            screen.blit(surf, (20, y))
+            y += 24
+
+    def _draw_hint(self, screen):
+        if self.segment.location_type.is_quest and not self.segment.cleared:
+            text = "WASD — идти | ЛКМ/Пробел — атака | E — взаимодействие | Esc — выйти"
+        else:
+            text = "WASD — идти | ЛКМ/Пробел — атака | Esc — выйти"
+        surf = self._font_hint.render(text, True, (230, 230, 230))
+        bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
+        bg.set_alpha(160)
+        bg.fill((0, 0, 0))
+        x = 10
+        y = screen.get_height() - surf.get_height() - 14
+        screen.blit(bg, (x, y))
+        screen.blit(surf, (x + 8, y + 4))
