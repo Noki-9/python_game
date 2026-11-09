@@ -1,5 +1,6 @@
 import pygame as pg
 
+from core.assets import assets
 from ui.overlay import UIOverlay
 
 STAT_NAMES = {
@@ -41,6 +42,25 @@ class CharacterUI(UIOverlay):
 
         title = self.font_big.render("Персонаж", True, (255, 255, 255))
         screen.blit(title, ((self.width - title.get_width()) // 2, 60))
+
+        content_x = max(14, self.width // 2 - 320)
+        assets.draw_panel(
+            screen,
+            pg.Rect(content_x, 96, min(self.width - content_x - 14, 660), 452),
+            alpha=225,
+        )
+
+        # Портрет класса
+        portrait = assets.unit_portrait("players", s.class_id, "down", 4)
+        px = min(self.width // 2 + 80, self.width - 160)
+        py = 120
+        if portrait is not None:
+            frame_rect = pg.Rect(px, py, portrait.get_width(), portrait.get_height())
+            assets.draw_panel(screen, frame_rect.inflate(16, 16), alpha=220)
+            screen.blit(portrait, frame_rect.topleft)
+        else:
+            pg.draw.rect(screen, s.class_def.color, (px, py, 128, 128))
+            pg.draw.rect(screen, (230, 230, 230), (px, py, 128, 128), 2)
 
         x = self.width // 2 - 300
         y = 110

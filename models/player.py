@@ -14,11 +14,24 @@ def _get_rect(obj) -> pg.Rect:
 
 class Player(Unit):
     def __init__(self, x, y, rect_x, rect_y, health, speed, texture, state=None):
-        super().__init__("player", x, y, rect_x, rect_y, health, speed, texture)
+        sprite_key = state.class_id if state is not None else "warrior"
+        super().__init__(
+            "player",
+            x,
+            y,
+            rect_x,
+            rect_y,
+            health,
+            speed,
+            texture,
+            sprite_group="players",
+            sprite_key=sprite_key,
+        )
         self.state = state
         self.attack_timer = 0.0
 
     def take_damage(self, amount):
+        self.trigger_hurt()
         if self.state is None:
             self.health -= amount
             return self.health <= 0
@@ -59,6 +72,8 @@ class Player(Unit):
             damage = int(damage * self.state.crit_multiplier)
 
         self.attack_timer = self.state.attack_cooldown
+        self.face_towards(target.x + target.rect_x / 2, target.y + target.rect_y / 2)
+        self.trigger_attack(0.25)
         killed = target.take_damage(damage)
         return killed, target, is_crit
 
@@ -79,6 +94,10 @@ class Player(Unit):
             dx -= 1
         if keys[pg.K_d]:
             dx += 1
+
+        self.moving = dx != 0 or dy != 0
+        if self.moving:
+            self.face_delta(dx, dy)
 
         length = math.hypot(dx, dy)
         if length != 0:
@@ -117,3 +136,21 @@ class Player(Unit):
                         self.y = w_rect.bottom
                     self.sync_rect()
                     break
+
+        self.update_animation(dt)
+
+    def draw(self, screen, camera):
+        px, py = camera.apply(self.x, self.y)
+        # Кольцо под ногами — помогает не терять героя среди травы.
+        ring_color = self.texture
+        pg.draw.ellipse(
+            screen,
+            ring_color,
+            (px - 2, py + self.rect_y - 7, self.rect_x + 4, 8),
+            1,
+        )
+        if not self.draw_sprite(screen, camera):
+            pg.draw.rect(screen, self.texture, (px, py, self.rect_x, self.rect_y))
+            pg.draw.rect(
+                screen, (240, 240, 240), (px, py, self.rect_x, self.rect_y), 1
+            )

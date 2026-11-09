@@ -1,5 +1,6 @@
 import pygame as pg
 
+from core.assets import assets
 from ui.overlay import UIOverlay
 
 COL_W = 420
@@ -115,9 +116,28 @@ class TradeUI(UIOverlay):
         screen.blit(title, ((self.width - title.get_width()) // 2, 60))
 
         gold = self.font_med.render(f"Золото: {self.state.gold}", True, (240, 220, 100))
-        screen.blit(gold, ((self.width - gold.get_width()) // 2, 100))
+        gold_icon = assets.named_icon("gold")
+        if gold_icon is not None:
+            gold_icon = assets.scaled(gold_icon, 24, 24)
+            total_w = gold_icon.get_width() + 6 + gold.get_width()
+            gx = (self.width - total_w) // 2
+            screen.blit(gold_icon, (gx, 99))
+            screen.blit(gold, (gx + gold_icon.get_width() + 6, 100))
+        else:
+            screen.blit(gold, ((self.width - gold.get_width()) // 2, 100))
 
         left, right = self._layout()
+
+        assets.draw_panel(
+            screen,
+            pg.Rect(
+                left.x - 16,
+                left.y - 42,
+                right.right - left.x + 32,
+                left.h + 58,
+            ),
+            alpha=225,
+        )
 
         # Заголовки колонок
         lh = self.font_med.render("Товар торговца", True, (200, 200, 220))
@@ -189,7 +209,12 @@ class TradeUI(UIOverlay):
         pg.draw.rect(screen, (45, 45, 65), row_rect)
 
         # Иконка
-        pg.draw.rect(screen, item.icon_color, (x + 6, y + 8, 26, 26))
+        icon = assets.item_icon(item)
+        if icon is not None:
+            icon = assets.scaled(icon, 28, 28)
+            screen.blit(icon, icon.get_rect(center=(x + 21, y + 21)))
+        else:
+            pg.draw.rect(screen, item.icon_color, (x + 6, y + 8, 26, 26))
         pg.draw.rect(screen, item.rarity.color, (x + 4, y + 6, 30, 30), 2)
 
         # Название

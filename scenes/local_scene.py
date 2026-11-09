@@ -4,12 +4,13 @@ import random
 import pygame as pg
 
 from core.abilities import get_abilities_for_class, get_ability_for_key
+from core.assets import assets
 from core.camera import Camera
 from core.config import TILE_SIZE, screen
 from core.scene_manager import Scene
 from core.utils import direction_name
 from models.player import Player
-from models.projectile import Projectile
+from models.projectile import Projectile, visual_for_ability
 from ui.character_ui import CharacterUI
 from ui.dialogue_ui import DialogueUI
 from ui.inventory_ui import InventoryUI
@@ -51,10 +52,12 @@ class LocalScene(Scene):
         self.npcs = []
         self.dropped_items = []
         self.projectiles = []
-        self.visual_effects = []  # [x, y, radius, color, t_left, t_max]
+        self.visual_effects = []  # [x, y, radius, color, t_left, t_max, kind]
+        self.particles = []
         self.return_pos = None
         self.notifications = []
         self._minimap_cache = None
+        self.time = 0.0
 
         self._font_hint = pg.font.SysFont(None, 22)
         self._font_label = pg.font.SysFont(None, 24)
@@ -85,7 +88,9 @@ class LocalScene(Scene):
         self.dropped_items = []
         self.projectiles = []
         self.visual_effects = []
+        self.particles = []
         self._minimap_cache = None
+        self.time = 0.0
 
         state = self.manager.player_state
         state.restore()
@@ -157,7 +162,10 @@ class LocalScene(Scene):
         for ty in range(self.map.height):
             row = tiles[ty]
             for tx in range(self.map.width):
-                base.set_at((tx, ty), COLORS.get(row[tx], (255, 0, 255)))
+                base.set_at(
+                    (tx, ty),
+                    assets.tile_color(row[tx], COLORS.get(row[tx], (255, 0, 255))),
+                )
         self._minimap_cache = pg.transform.scale(base, (MINIMAP_SIZE, MINIMAP_SIZE))
 
     # ================= Ввод =================
@@ -221,6 +229,41 @@ class LocalScene(Scene):
             self._player_attack()
 
     # ================= Умения =================
+    @staticmethod
+    def _ability_fx(ability_id):
+        if ability_id == "m_f":
+            return "ice"
+        if ability_id == "m_r":
+            return "explosion"
+        if ability_id == "w_f":
+            return "heal"
+        if ability_id.startswith(("w_", "r_")):
+            return "slash"
+        if ability_id in ("a_q", "a_f"):
+            return "hit"
+        return "explosion"
+
+    def _add_fx(self, kind, x, y, color=(255, 255, 255), radius=32, duration=0.35):
+        self.visual_effects.append([x, y, radius, color, duration, duration, kind])
+
+    def _spawn_particles(self, x, y, color, count=8, speed=90):
+        for _ in range(count):
+            angle = random.uniform(0, math.tau)
+            spd = random.uniform(speed * 0.35, speed)
+            life = random.uniform(0.25, 0.55)
+            self.particles.append(
+                [
+                    x,
+                    y,
+                    math.cos(angle) * spd,
+                    math.sin(angle) * spd,
+                    life,
+                    life,
+                    color,
+                    random.choice((1, 1, 2)),
+                ]
+            )
+
     def _cast_ability(self, key):
         s = self.manager.player_state
         ability = get_ability_for_key(s.class_id, key)
@@ -234,6 +277,7 @@ class LocalScene(Scene):
         if not s.try_spend_ability(ability):
             return
 
+        self.player.trigger_attack(0.3)
         if ability.is_projectile:
             self._cast_projectile(ability)
         elif ability.is_aoe_at_cursor:
@@ -275,6 +319,7 @@ class LocalScene(Scene):
                     color=ability.color,
                     lifetime=lifetime,
                     aoe_radius=ability.aoe_radius,
+                    visual=visual_for_ability(ability.ability_id),
                 )
             )
 
@@ -303,7 +348,10 @@ class LocalScene(Scene):
                     if t.take_damage(damage):
                         self._on_enemy_killed(t)
 
-        self.visual_effects.append([wx, wy, radius, ability.color, 0.5, 0.5])
+        self.visual_effects.append(
+            [wx, wy, radius, ability.color, 0.5, 0.5, self._ability_fx(ability.ability_id)]
+        )
+        self._spawn_particles(wx, wy, ability.color, count=14, speed=130)
 
     def _cast_aoe_self(self, ability):
         pcx = self.player.x + self.player.rect_x / 2
@@ -324,8 +372,12 @@ class LocalScene(Scene):
         if ability.heal > 0:
             self.manager.player_state.heal(ability.heal)
             self.notifications.append((f"+{ability.heal} HP", 1.0))
+            self._add_fx("heal", pcx, pcy, (120, 255, 160), 40, 0.5)
 
-        self.visual_effects.append([pcx, pcy, radius, ability.color, 0.35, 0.35])
+        self.visual_effects.append(
+            [pcx, pcy, radius, ability.color, 0.35, 0.35, self._ability_fx(ability.ability_id)]
+        )
+        self._spawn_particles(pcx, pcy, ability.color, count=10, speed=120)
 
     def _cast_single_target(self, ability):
         pcx = self.player.x + self.player.rect_x / 2
@@ -357,20 +409,42 @@ class LocalScene(Scene):
                 ability.color,
                 0.25,
                 0.25,
+                self._ability_fx(ability.ability_id),
             ]
+        )
+        self._spawn_particles(
+            best.x + best.rect_x / 2,
+            best.y + best.rect_y / 2,
+            ability.color,
+            count=10,
+            speed=100,
         )
 
     # ================= Атака =================
     def _player_attack(self):
+        self.player.trigger_attack(0.25)
         targets = [e for e in self.enemies if e.is_alive()] + [
             a for a in self.animals if a.is_alive()
         ]
         result = self.player.try_attack(targets)
         if result is None:
+            # Взмах в пустоту — эффект и анимация всё равно видны.
+            dirs = {"left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1)}
+            ox, oy = dirs.get(self.player.facing, (0, 1))
+            px = self.player.x + self.player.rect_x / 2 + ox * 26
+            py = self.player.y + self.player.rect_y / 2 + oy * 26
+            self._add_fx("slash", px, py, (255, 245, 210), 24, 0.22)
             return
         killed, target, is_crit = result
+        tx = target.x + target.rect_x / 2
+        ty = target.y + target.rect_y / 2
         if is_crit:
             self.notifications.append(("КРИТ!", 1.0))
+            self._add_fx("slash", tx, ty, (255, 230, 120), 34, 0.3)
+            self._spawn_particles(tx, ty, (255, 210, 90), count=14, speed=140)
+        else:
+            self._add_fx("hit", tx, ty, (255, 240, 210), 22, 0.22)
+            self._spawn_particles(tx, ty, target.texture, count=7, speed=95)
         if killed:
             self._on_enemy_killed(target)
 
@@ -391,6 +465,11 @@ class LocalScene(Scene):
                 self.dropped_items.append((equip, enemy.x, enemy.y))
         state.add_xp(enemy.xp_reward)
         self.notifications.append((f"+{enemy.xp_reward} XP", 1.5))
+
+        cx, cy = enemy.x + enemy.rect_x / 2, enemy.y + enemy.rect_y / 2
+        self._add_fx("hit", cx, cy, enemy.texture, 28, 0.3)
+        self._spawn_particles(cx, cy, enemy.texture, count=16, speed=135)
+        self._add_fx("pickup", cx, cy, (255, 220, 120), 20, 0.45)
 
         finished = state.quest_log.notify_kill(enemy.enemy_id)
         self._on_quests_completed(finished)
@@ -468,6 +547,8 @@ class LocalScene(Scene):
             self._on_player_death()
             return
 
+        self.time += dt
+
         state = self.manager.player_state
         state.tick_ability_cooldowns(dt)
         state.regen_mana(dt)
@@ -498,15 +579,37 @@ class LocalScene(Scene):
             )
             a.update(dt, self.player, walls)
 
+        for npc in self.npcs:
+            npc.update(dt, self.player)
+
         for p in self.projectiles:
+            was_alive = p.alive
             killed_list = p.update(dt, self.enemies, self.animals, self.map, TILE_SIZE)
             for target in killed_list:
                 self._on_enemy_killed(target)
+            if was_alive and not p.alive:
+                if p.visual in ("fireball", "meteor"):
+                    kind = "explosion"
+                elif p.visual == "ice":
+                    kind = "ice"
+                else:
+                    kind = "hit"
+                radius = max(24, p.aoe_radius) if p.aoe_radius else 24
+                self._add_fx(kind, p.x, p.y, p.color, radius, 0.38)
+                self._spawn_particles(p.x, p.y, p.color, count=10, speed=110)
         self.projectiles = [p for p in self.projectiles if p.alive]
 
         for eff in self.visual_effects:
             eff[4] -= dt
         self.visual_effects = [e for e in self.visual_effects if e[4] > 0]
+
+        for part in self.particles:
+            part[0] += part[2] * dt
+            part[1] += part[3] * dt
+            part[2] *= max(0.0, 1.0 - 4.0 * dt)
+            part[3] *= max(0.0, 1.0 - 4.0 * dt)
+            part[4] -= dt
+        self.particles = [p for p in self.particles if p[4] > 0]
 
         self._collect_drops()
 
@@ -568,43 +671,30 @@ class LocalScene(Scene):
         tx1 = min(tx1, self.map.width)
         ty1 = min(ty1, self.map.height)
         tiles = self.map.tiles
+        tile_at = assets.tile
         for ty in range(ty0, ty1):
             row = tiles[ty]
             sy = ty * TILE_SIZE - int(self.camera.y)
             for tx in range(tx0, tx1):
                 sx = tx * TILE_SIZE - int(self.camera.x)
-                color = COLORS.get(row[tx], (255, 0, 255))
-                pg.draw.rect(screen, color, (sx, sy, TILE_SIZE, TILE_SIZE))
+                name = row[tx]
+                variant = (tx * 73856093 ^ ty * 19349663) & 0x7FFFFFFF
+                image = tile_at(name, variant, self.time)
+                if image is not None:
+                    screen.blit(image, (sx, sy))
+                else:
+                    pg.draw.rect(
+                        screen, COLORS.get(name, (255, 0, 255)), (sx, sy, TILE_SIZE, TILE_SIZE)
+                    )
 
-        self._draw_quest_marker(screen)
-
-        for a in self.animals:
-            if a.is_alive():
-                a.draw(screen, self.camera)
-        for e in self.enemies:
-            if e.is_alive():
-                e.draw(screen, self.camera)
-
-        for npc in self.npcs:
-            npc.draw(screen, self.camera, self._font_npc)
-
-        for item, x, y in self.dropped_items:
-            sx, sy = self.camera.apply(x + 12, y + 12)
-            color = item.rarity.color if item.is_equipment else item.icon_color
-            pg.draw.circle(screen, color, (sx, sy), 5)
-            pg.draw.circle(screen, (20, 20, 20), (sx, sy), 5, 1)
-
+        self._draw_props(screen)
+        self._draw_entities(screen)
+        self._draw_dropped_items(screen)
         for p in self.projectiles:
             p.draw(screen, self.camera)
-
         self._draw_visual_effects(screen)
-
-        px, py = self.camera.apply(self.player.x, self.player.y)
-        pg.draw.rect(
-            screen,
-            self.player.texture,
-            (px, py, self.player.rect_x, self.player.rect_y),
-        )
+        self._draw_particles(screen)
+        self._draw_quest_marker(screen)
 
         self._draw_label(screen)
         self._draw_hud(screen)
@@ -614,10 +704,72 @@ class LocalScene(Scene):
         self._draw_notifications(screen)
         self._draw_hint(screen)
 
+    # ---------- Пропсы и сущности ----------
+    def _draw_props(self, screen):
+        for kind, tx, ty in getattr(self.map, "props", []):
+            image = assets.prop(kind, self.time)
+            if image is None:
+                continue
+            sx, sy = self.camera.apply(tx * TILE_SIZE, ty * TILE_SIZE)
+            if -64 < sx < self.camera.view_w + 64 and -64 < sy < self.camera.view_h + 64:
+                screen.blit(image, (sx, sy))
+
+    def _draw_entities(self, screen):
+        drawables = []
+        for a in self.animals:
+            if a.is_alive():
+                drawables.append((a.y + a.rect_y, "unit", a))
+        for e in self.enemies:
+            if e.is_alive():
+                drawables.append((e.y + e.rect_y, "unit", e))
+        for npc in self.npcs:
+            drawables.append((npc.y + npc.rect_y, "npc", npc))
+        drawables.append((self.player.y + self.player.rect_y, "unit", self.player))
+        drawables.sort(key=lambda item: item[0])
+        for _y, kind, obj in drawables:
+            if kind == "npc":
+                obj.draw(screen, self.camera, self._font_npc)
+            else:
+                obj.draw(screen, self.camera)
+
+    def _draw_dropped_items(self, screen):
+        for item, x, y in self.dropped_items:
+            sx, sy = self.camera.apply(x + 4, y + 4)
+            bob = int(math.sin(self.time * 3.0 + (x + y) * 0.01) * 3)
+            cx, cy = sx + 12, sy + 12 + bob
+            color = item.rarity.color if item.is_equipment else item.icon_color
+            pg.draw.circle(screen, (20, 20, 20), (cx, cy + 5), 9)
+            pg.draw.circle(screen, color, (cx, cy), 11, 1)
+            icon = assets.item_icon(item)
+            if icon is not None:
+                icon = assets.scaled(icon, 22, 22)
+                screen.blit(icon, icon.get_rect(center=(cx, cy)))
+            else:
+                pg.draw.circle(screen, color, (cx, cy), 5)
+
+    def _draw_particles(self, screen):
+        for x, y, vx, vy, life, max_life, color, size in self.particles:
+            t = max(0.0, min(1.0, life / max_life))
+            c = (int(color[0] * t), int(color[1] * t), int(color[2] * t))
+            sx, sy = self.camera.apply(x, y)
+            pg.draw.rect(screen, c, (sx, sy, size, size))
+
     # ---------- Отрисовка эффектов ----------
     def _draw_visual_effects(self, screen):
-        for x, y, radius, color, t_left, t_max in self.visual_effects:
+        for effect in self.visual_effects:
+            x, y, radius, color, t_left, t_max = effect[:6]
+            kind = effect[6] if len(effect) > 6 else "ring"
             sx, sy = self.camera.apply(x, y)
+            if kind != "ring":
+                progress = 1.0 - max(0.0, t_left) / max(0.001, t_max)
+                frame = assets.effect_frame(kind, progress)
+                if frame is not None:
+                    size = max(28, int(radius * 1.3))
+                    frame = assets.scaled(frame, size, size).copy()
+                    alpha = int(255 * min(1.0, max(0.0, t_left) / max(0.001, t_max * 0.6)))
+                    frame.set_alpha(alpha)
+                    screen.blit(frame, frame.get_rect(center=(sx, sy)))
+                    continue
             alpha = int(255 * (t_left / t_max))
             surf = pg.Surface((radius * 2 + 4, radius * 2 + 4), pg.SRCALPHA)
             c = (color[0], color[1], color[2], max(0, alpha // 2))
@@ -629,13 +781,19 @@ class LocalScene(Scene):
     def _draw_quest_marker(self, screen):
         if not self.segment.location_type.is_quest:
             return
-        cx = (self.map.width // 2) * TILE_SIZE
-        cy = (self.map.height // 2) * TILE_SIZE
+        cx = (self.map.width // 2) * TILE_SIZE + TILE_SIZE // 2
+        cy = (self.map.height // 2) * TILE_SIZE + TILE_SIZE // 2
         sx, sy = self.camera.apply(cx, cy)
-        color = (100, 100, 100) if self.segment.cleared else (230, 200, 80)
-        center = (sx + TILE_SIZE // 2, sy + TILE_SIZE // 2)
-        pg.draw.circle(screen, color, center, 22, 2)
-        pg.draw.circle(screen, color, center, 8)
+        color = (120, 120, 120) if self.segment.cleared else (240, 208, 90)
+        pulse = 2.0 * math.sin(self.time * 3.0)
+        pg.draw.circle(screen, color, (sx, sy), int(20 + pulse), 2)
+        bob = int(math.sin(self.time * 2.5) * 3)
+        icon = assets.world_icon("cleared" if self.segment.cleared else "quest")
+        if icon is not None:
+            icon = assets.scaled(icon, 22, 22)
+            screen.blit(icon, icon.get_rect(center=(sx, sy - 30 + bob)))
+        else:
+            pg.draw.circle(screen, color, (sx, sy - 26 + bob), 8)
 
     def _draw_label(self, screen):
         text = self.segment.location_type.display_name
@@ -651,12 +809,12 @@ class LocalScene(Scene):
     def _draw_hud(self, screen):
         s = self.manager.player_state
         y = 50
-        self._bar(screen, 10, y, 200, 16, s.hp_ratio, (220, 60, 60))
+        assets.draw_bar(screen, (10, y, 200, 16), s.hp_ratio, "bar_hp")
         surf = self._font_hud.render(f"HP: {s.hp}/{s.max_hp}", True, (255, 255, 255))
         screen.blit(surf, (216, y - 1))
 
         y += 20
-        self._bar(screen, 10, y, 200, 12, s.mana_ratio, (80, 160, 240))
+        assets.draw_bar(screen, (10, y, 200, 12), s.mana_ratio, "bar_mp")
         surf = self._font_hud.render(
             f"MP: {int(s.mana)}/{s.max_mana}", True, (255, 255, 255)
         )
@@ -664,15 +822,22 @@ class LocalScene(Scene):
 
         y += 18
         xp_r = s.xp / s.xp_to_next if s.xp_to_next else 0
-        self._bar(screen, 10, y, 200, 14, xp_r, (90, 180, 230))
+        assets.draw_bar(screen, (10, y, 200, 14), xp_r, "bar_xp")
         surf = self._font_hud.render(
             f"Ур. {s.level}  XP: {s.xp}/{s.xp_to_next}", True, (255, 255, 255)
         )
         screen.blit(surf, (216, y - 1))
 
         y += 18
-        surf = self._font_hud.render(f"Золото: {s.gold}", True, (240, 220, 100))
-        screen.blit(surf, (10, y))
+        gold_icon = assets.named_icon("gold")
+        if gold_icon is not None:
+            gold_icon = assets.scaled(gold_icon, 16, 16)
+            screen.blit(gold_icon, (10, y - 1))
+            surf = self._font_hud.render(f"Золото: {s.gold}", True, (240, 220, 100))
+            screen.blit(surf, (30, y))
+        else:
+            surf = self._font_hud.render(f"Золото: {s.gold}", True, (240, 220, 100))
+            screen.blit(surf, (10, y))
 
         y += 18
         if s.stat_points > 0 or s.skill_points > 0:
@@ -765,8 +930,13 @@ class LocalScene(Scene):
             pg.draw.rect(screen, bg, rect)
             pg.draw.rect(screen, border, rect, 2)
 
-            pg.draw.circle(screen, ab.color, (rect.centerx, rect.centery), 18)
-            pg.draw.circle(screen, (30, 30, 30), (rect.centerx, rect.centery), 18, 1)
+            icon = assets.ability_icon(ab.ability_id)
+            if icon is not None:
+                icon = assets.scaled(icon, 40, 40)
+                screen.blit(icon, icon.get_rect(center=(rect.centerx, rect.centery)))
+            else:
+                pg.draw.circle(screen, ab.color, (rect.centerx, rect.centery), 18)
+                pg.draw.circle(screen, (30, 30, 30), (rect.centerx, rect.centery), 18, 1)
 
             k = self._font_key.render(ab.key, True, (255, 255, 255))
             screen.blit(k, (rect.x + 4, rect.y + 1))
@@ -811,8 +981,13 @@ class LocalScene(Scene):
             qx = mm_x + int(cx * scale_x)
             qy = mm_y + int(cy * scale_y)
             color = (100, 100, 100) if self.segment.cleared else (230, 200, 80)
-            pg.draw.circle(screen, color, (qx, qy), 4)
-            pg.draw.circle(screen, (20, 20, 20), (qx, qy), 4, 1)
+            pg.draw.circle(screen, color, (qx, qy), 5, 1)
+            icon = assets.world_icon("cleared" if self.segment.cleared else "quest")
+            if icon is not None:
+                icon = assets.scaled(icon, 12, 12)
+                screen.blit(icon, icon.get_rect(center=(qx, qy)))
+            else:
+                pg.draw.circle(screen, color, (qx, qy), 4)
 
         # Животные
         for a in self.animals:
@@ -829,6 +1004,23 @@ class LocalScene(Scene):
             ex = mm_x + int((e.x + e.rect_x / 2) * scale_x)
             ey = mm_y + int((e.y + e.rect_y / 2) * scale_y)
             pg.draw.circle(screen, (220, 60, 60), (ex, ey), 2)
+
+        # Объекты локации
+        prop_colors = {
+            "altar": (120, 230, 255),
+            "campfire": (255, 150, 60),
+            "brazier": (255, 180, 80),
+            "chest": (240, 200, 90),
+            "cave": (30, 30, 38),
+            "well": (90, 150, 210),
+            "ruins": (160, 160, 160),
+            "grave": (180, 180, 190),
+            "crate": (170, 120, 70),
+        }
+        for kind, ptx, pty in getattr(self.map, "props", []):
+            px = mm_x + int(ptx * TILE_SIZE * scale_x)
+            py = mm_y + int(pty * TILE_SIZE * scale_y)
+            pg.draw.circle(screen, prop_colors.get(kind, (200, 200, 200)), (px, py), 2)
 
         # NPC
         for npc in self.npcs:
@@ -847,8 +1039,14 @@ class LocalScene(Scene):
         # Игрок
         px = mm_x + int((self.player.x + self.player.rect_x / 2) * scale_x)
         py = mm_y + int((self.player.y + self.player.rect_y / 2) * scale_y)
-        pg.draw.circle(screen, (100, 180, 255), (px, py), 3)
-        pg.draw.circle(screen, (255, 255, 255), (px, py), 3, 1)
+        icon = assets.world_icon("player")
+        if icon is not None:
+            pg.draw.circle(screen, (255, 255, 255), (px, py), 7, 1)
+            icon = assets.scaled(icon, 12, 12)
+            screen.blit(icon, icon.get_rect(center=(px, py)))
+        else:
+            pg.draw.circle(screen, (100, 180, 255), (px, py), 3)
+            pg.draw.circle(screen, (255, 255, 255), (px, py), 3, 1)
 
     def _draw_notifications(self, screen):
         y = screen.get_height() - 220

@@ -16,6 +16,7 @@ ENEMY_DEFS = {
         aggro_radius=180,
         xp=15,
         color=(120, 180, 80),
+        scale=0.9,
     ),
     "bandit": dict(
         hp=35,
@@ -46,6 +47,7 @@ ENEMY_DEFS = {
         aggro_radius=250,
         xp=100,
         color=(90, 130, 70),
+        scale=1.3,
     ),
 }
 
@@ -185,6 +187,27 @@ BIOME_ENEMIES = {
     Biome.MOUNTAIN: ["troll", "skeleton"],
 }
 
+# Визуальный масштаб спрайтов (хитбокс не меняется).
+VISUAL_SCALES = {
+    "goblin": 0.9,
+    "bandit": 1.0,
+    "skeleton": 0.95,
+    "troll": 1.3,
+    "deer": 1.05,
+    "wolf": 1.0,
+    "boar": 1.0,
+    "bear": 1.2,
+    "rabbit": 0.75,
+    "fox": 0.85,
+    "sheep": 0.95,
+    "snake": 1.0,
+    "scorpion": 1.0,
+    "lizard": 0.75,
+    "snow_wolf": 1.0,
+    "moose": 1.25,
+    "goat": 0.95,
+}
+
 
 def _random_free_pos(rng, local_map, avoid_pos=None, min_dist=0):
     for _ in range(300):
@@ -225,6 +248,8 @@ def spawn_enemies(local_map, biome, location_type, seed, level=1):
             enemy_id = "troll"
 
         defn = ENEMY_DEFS[enemy_id]
+        is_boss = location_type.is_quest and i == 0 and biome == Biome.MOUNTAIN
+        scale = VISUAL_SCALES.get(enemy_id, 1.0) * (1.15 if is_boss else 1.0)
 
         pos = _random_free_pos(rng, local_map, avoid, min_dist=220)
         if pos is None:
@@ -246,6 +271,7 @@ def spawn_enemies(local_map, biome, location_type, seed, level=1):
             xp_reward=defn["xp"],
             color=defn["color"],
             loot_rng_seed=rng.randint(0, 1_000_000),
+            visual_scale=scale,
         )
         enemies.append(e)
 
@@ -290,6 +316,7 @@ def spawn_animals(local_map, biome, location_type, seed):
             color=defn["color"],
             passive=defn["passive"],
             loot_rng_seed=rng.randint(0, 1_000_000),
+            visual_scale=VISUAL_SCALES.get(animal_id, 1.0),
         )
         animals.append(a)
 

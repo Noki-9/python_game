@@ -1,5 +1,6 @@
 import pygame as pg
 
+from core.assets import assets
 from ui.overlay import UIOverlay
 from world.quest import QuestStatus
 
@@ -105,7 +106,13 @@ class QuestLogUI(UIOverlay):
             True,
             (240, 210, 120),
         )
-        screen.blit(reward, (x + 12, y + 74))
+        reward_x = x + 12
+        gold_icon = assets.named_icon("gold")
+        if gold_icon is not None:
+            gold_icon = assets.scaled(gold_icon, 14, 14)
+            screen.blit(gold_icon, (reward_x, y + 74))
+            reward_x += 18
+        screen.blit(reward, (reward_x, y + 74))
 
         # Выдал
         if quest.giver_name:

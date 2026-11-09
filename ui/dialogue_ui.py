@@ -1,5 +1,6 @@
 import pygame as pg
 
+from core.assets import assets
 from ui.overlay import UIOverlay
 from world.dialogue import DIALOGUES
 from world.quest_gen import generate_quest
@@ -113,6 +114,15 @@ class DialogueUI(UIOverlay):
             self.npc.texture,
         )
         screen.blit(title, ((self.width - title.get_width()) // 2, 60))
+
+        portrait = assets.unit_portrait("npcs", self.npc.role, "down", 4)
+        if portrait is not None:
+            px = min(self.width // 2 + 260, self.width - 150)
+            py = 118
+            assets.draw_panel(
+                screen, pg.Rect(px - 8, py - 8, 144, 144), alpha=220
+            )
+            screen.blit(portrait, (px, py))
 
         node = self._get_node()
         if node is None:

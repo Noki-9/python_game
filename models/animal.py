@@ -21,6 +21,7 @@ class Animal(Enemy):
         color,
         passive=True,
         loot_rng_seed=0,
+        visual_scale=1.0,
     ):
         super().__init__(
             animal_id,
@@ -37,7 +38,11 @@ class Animal(Enemy):
             xp_reward=xp_reward,
             color=color,
             loot_rng_seed=loot_rng_seed,
+            visual_scale=visual_scale,
         )
+        self.type = "animal"
+        self.sprite_group = "animals"
+        self.sprite_key = animal_id
         self.passive = passive
 
     def update(self, dt, player, walls):
@@ -59,10 +64,14 @@ class Animal(Enemy):
             if self.alert_timer > 0 and dist > 0:
                 mvx = -dx / dist * self.speed * dt
                 mvy = -dy / dist * self.speed * dt
+                self.moving = True
+                self.face_delta(mvx, mvy)
                 self._try_move(mvx, mvy, walls)
                 self.ai_state = "flee"
             else:
                 self.ai_state = "idle"
+                self.moving = False
+            self.update_animation(dt)
             return
 
         # Агрессивные животные — как обычный Enemy

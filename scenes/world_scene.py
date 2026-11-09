@@ -2,6 +2,7 @@ import math
 
 import pygame as pg
 
+from core.assets import assets
 from core.camera import Camera
 from core.config import (
     MEMORY_VISIBILITY,
@@ -32,6 +33,14 @@ DEFAULT_MOVE_COST = 1
 
 MINIMAP_W = 180
 MINIMAP_H = 144
+
+POI_ICONS = {
+    "starting_village": "village_start",
+    "village": "village",
+    "quest_dungeon": "quest",
+    "main_antagonist": "main",
+    "wild_point": "wild",
+}
 
 
 def _mix(a, b, t):
@@ -407,6 +416,7 @@ class WorldScene(Scene):
         self._draw_hint(screen)
 
     def _draw_pois(self, screen, cam_x, cam_y):
+        t = pg.time.get_ticks() / 1000.0
         for poi in self.world.pois:
             if not self._is_poi_visible(poi):
                 continue
@@ -419,10 +429,23 @@ class WorldScene(Scene):
                 or sy > self.camera.view_h
             ):
                 continue
-            color = (100, 100, 100) if poi.cleared else poi.icon_color
             center = (sx + SEG_SIZE // 2, sy + SEG_SIZE // 2)
-            pg.draw.circle(screen, color, center, 6)
-            pg.draw.circle(screen, (20, 20, 20), center, 6, 1)
+            color = (120, 120, 120) if poi.cleared else poi.icon_color
+            pulse = 1.0 + 0.18 * math.sin(t * 2.6 + poi.gx * 0.7)
+            pg.draw.circle(screen, color, center, int(10 * pulse), 1)
+            icon = assets.world_icon(POI_ICONS.get(poi.poi_type.value, "wild"))
+            if icon is not None:
+                size = 20 if poi.poi_type.value != "wild_point" else 15
+                icon = assets.scaled(icon, size, size)
+                screen.blit(icon, icon.get_rect(center=center))
+                if poi.cleared:
+                    check = assets.world_icon("cleared")
+                    if check is not None:
+                        check = assets.scaled(check, 9, 9)
+                        screen.blit(check, (center[0] + 5, center[1] + 5))
+            else:
+                pg.draw.circle(screen, color, center, 6)
+                pg.draw.circle(screen, (20, 20, 20), center, 6, 1)
 
     def _is_poi_visible(self, poi):
         if self.mode == "spawn":
@@ -471,7 +494,12 @@ class WorldScene(Scene):
                 continue
             r = int(9 * pulse)
             pg.draw.circle(screen, (255, 200, 100), (sx, sy), r, 2)
-            pg.draw.circle(screen, (255, 200, 100), (sx, sy), 3)
+            icon = assets.world_icon("quest")
+            if icon is not None:
+                icon = assets.scaled(icon, 16, 16)
+                screen.blit(icon, icon.get_rect(center=(sx, sy)))
+            else:
+                pg.draw.circle(screen, (255, 200, 100), (sx, sy), 3)
 
     def _draw_waypoint(self, screen, cam_x, cam_y):
         if self.state.waypoint is None:
@@ -482,6 +510,13 @@ class WorldScene(Scene):
         if not (
             -30 < sx < self.camera.view_w + 30 and -30 < sy < self.camera.view_h + 30
         ):
+            return
+        icon = assets.world_icon("waypoint")
+        if icon is not None:
+            bob = int(math.sin(pg.time.get_ticks() / 280.0) * 2)
+            icon = assets.scaled(icon, 20, 20)
+            screen.blit(icon, icon.get_rect(center=(sx, sy - 8 + bob)))
+            pg.draw.circle(screen, (255, 230, 80), (sx, sy), 4, 1)
             return
         # Флажок
         pg.draw.line(screen, (230, 230, 200), (sx, sy - 4), (sx, sy - 16), 2)
@@ -509,33 +544,52 @@ class WorldScene(Scene):
         px = self.gx * SEG_SIZE - cam_x
         py = self.gy * SEG_SIZE - cam_y
         color = self.state.class_def.color if self.state.stamina > 0 else (100, 60, 60)
-        pg.draw.rect(screen, color, (px, py, SEG_SIZE, SEG_SIZE))
-        pg.draw.rect(screen, (255, 255, 255), (px, py, SEG_SIZE, SEG_SIZE), 1)
+        t = pg.time.get_ticks() / 1000.0
+        cx = px + SEG_SIZE // 2
+        cy = py + SEG_SIZE // 2
+        ring = int(11 + 2 * math.sin(t * 3.0))
+        pg.draw.circle(screen, color, (cx, cy), ring, 1)
+        icon = assets.world_icon("player")
+        if icon is not None:
+            icon = assets.scaled(icon, 24, 24)
+            icon = icon.copy()
+            icon.fill((*color, 255), special_flags=pg.BLEND_RGBA_MULT)
+            screen.blit(icon, icon.get_rect(center=(cx, cy)))
+            pg.draw.circle(screen, (255, 255, 255), (cx, cy), 2)
+        else:
+            pg.draw.rect(screen, color, (px, py, SEG_SIZE, SEG_SIZE))
+            pg.draw.rect(screen, (255, 255, 255), (px, py, SEG_SIZE, SEG_SIZE), 1)
 
     def _draw_hud(self, screen):
         s = self.state
         bar_w, bar_h = 220, 18
         x, y = 12, 12
-        self._bar(screen, x, y, bar_w, bar_h, s.hp_ratio, (220, 60, 60))
+        assets.draw_bar(screen, (x, y, bar_w, bar_h), s.hp_ratio, "bar_hp")
         t = self._font_small.render(f"HP {s.hp}/{s.max_hp}", True, (255, 255, 255))
         screen.blit(t, (x + bar_w + 8, y + 2))
         y += bar_h + 4
-        color = (220, 200, 60) if s.stamina_ratio > 0.3 else (220, 60, 60)
-        self._bar(screen, x, y, bar_w, bar_h - 4, s.stamina_ratio, color)
+        assets.draw_bar(screen, (x, y, bar_w, bar_h - 4), s.stamina_ratio, "bar_stamina")
         t = self._font_small.render(
             f"Силы {s.stamina}/{s.max_stamina}", True, (255, 255, 255)
         )
         screen.blit(t, (x + bar_w + 8, y))
         y += bar_h
         xp_r = s.xp / s.xp_to_next if s.xp_to_next else 0
-        self._bar(screen, x, y, bar_w, bar_h - 4, xp_r, (90, 180, 230))
+        assets.draw_bar(screen, (x, y, bar_w, bar_h - 4), xp_r, "bar_xp")
         t = self._font_small.render(
             f"Ур. {s.level}  {s.xp}/{s.xp_to_next}", True, (255, 255, 255)
         )
         screen.blit(t, (x + bar_w + 8, y))
         y += bar_h
-        t = self._font_small.render(f"Золото: {s.gold}", True, (240, 220, 100))
-        screen.blit(t, (x, y))
+        gold_icon = assets.named_icon("gold")
+        if gold_icon is not None:
+            gold_icon = assets.scaled(gold_icon, 18, 18)
+            screen.blit(gold_icon, (x, y - 1))
+            t = self._font_small.render(f"Золото: {s.gold}", True, (240, 220, 100))
+            screen.blit(t, (x + 22, y))
+        else:
+            t = self._font_small.render(f"Золото: {s.gold}", True, (240, 220, 100))
+            screen.blit(t, (x, y))
         y += 20
 
         # === Навигация ===
@@ -629,9 +683,19 @@ class WorldScene(Scene):
             if not self._is_poi_visible(poi):
                 continue
             px, py = to_mm(poi.gx, poi.gy)
-            color = (100, 100, 100) if poi.cleared else poi.icon_color
-            pg.draw.circle(screen, color, (px, py), 3)
-            pg.draw.circle(screen, (20, 20, 20), (px, py), 3, 1)
+            icon = assets.world_icon(POI_ICONS.get(poi.poi_type.value, "wild"))
+            if icon is not None:
+                size = 13 if poi.poi_type.value != "wild_point" else 10
+                icon = assets.scaled(icon, size, size)
+                pg.draw.circle(screen, (20, 20, 20), (px, py), size // 2 + 1)
+                if poi.cleared:
+                    icon = icon.copy()
+                    icon.fill((120, 120, 120, 255), special_flags=pg.BLEND_RGBA_MULT)
+                screen.blit(icon, icon.get_rect(center=(px, py)))
+            else:
+                color = (100, 100, 100) if poi.cleared else poi.icon_color
+                pg.draw.circle(screen, color, (px, py), 3)
+                pg.draw.circle(screen, (20, 20, 20), (px, py), 3, 1)
 
         # Квестовые цели (в play-режиме)
         if self.mode == "play":
@@ -639,18 +703,34 @@ class WorldScene(Scene):
                 if q.target_gx is None:
                     continue
                 px, py = to_mm(q.target_gx, q.target_gy)
-                pg.draw.circle(screen, (255, 200, 100), (px, py), 3, 1)
+                icon = assets.world_icon("quest")
+                if icon is not None:
+                    icon = assets.scaled(icon, 11, 11)
+                    screen.blit(icon, icon.get_rect(center=(px, py)))
+                else:
+                    pg.draw.circle(screen, (255, 200, 100), (px, py), 3, 1)
 
             # Метка
             if self.state.waypoint is not None:
                 px, py = to_mm(*self.state.waypoint)
-                pg.draw.circle(screen, (255, 230, 80), (px, py), 4)
-                pg.draw.circle(screen, (30, 30, 30), (px, py), 4, 1)
+                icon = assets.world_icon("waypoint")
+                if icon is not None:
+                    icon = assets.scaled(icon, 13, 13)
+                    screen.blit(icon, icon.get_rect(center=(px, py)))
+                else:
+                    pg.draw.circle(screen, (255, 230, 80), (px, py), 4)
+                    pg.draw.circle(screen, (30, 30, 30), (px, py), 4, 1)
 
         # Игрок
         px, py = to_mm(self.gx, self.gy)
-        pg.draw.circle(screen, (255, 60, 60), (px, py), 4)
-        pg.draw.circle(screen, (255, 255, 255), (px, py), 4, 1)
+        icon = assets.world_icon("player")
+        if icon is not None:
+            pg.draw.circle(screen, (255, 255, 255), (px, py), 7, 1)
+            icon = assets.scaled(icon, 13, 13)
+            screen.blit(icon, icon.get_rect(center=(px, py)))
+        else:
+            pg.draw.circle(screen, (255, 60, 60), (px, py), 4)
+            pg.draw.circle(screen, (255, 255, 255), (px, py), 4, 1)
 
     def _draw_hint(self, screen):
         if self.mode == "spawn":

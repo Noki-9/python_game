@@ -2,6 +2,19 @@ import math
 
 import pygame as pg
 
+from core.assets import assets
+
+PROJECTILE_VISUALS = {
+    "m_q": "fireball",
+    "m_r": "meteor",
+    "a_q": "arrow",
+    "a_f": "arrow",
+}
+
+
+def visual_for_ability(ability_id: str) -> str:
+    return PROJECTILE_VISUALS.get(ability_id, "orb")
+
 
 class Projectile:
     def __init__(
@@ -15,6 +28,7 @@ class Projectile:
         color=(255, 200, 100),
         lifetime=1.5,
         aoe_radius=0,
+        visual="orb",
     ):
         self.x = x
         self.y = y
@@ -25,7 +39,10 @@ class Projectile:
         self.color = color
         self.lifetime = lifetime
         self.aoe_radius = aoe_radius
+        self.visual = visual
         self.alive = True
+        self.elapsed = 0.0
+        self.angle = math.atan2(vy, vx)
 
     def update(self, dt, enemies, animals, local_map, tile_size) -> list:
         """Возвращает список убитых целей."""
@@ -33,6 +50,7 @@ class Projectile:
         if not self.alive:
             return killed
 
+        self.elapsed += dt
         self.lifetime -= dt
         if self.lifetime <= 0:
             killed = self._apply_damage(enemies, animals)
@@ -93,5 +111,21 @@ class Projectile:
 
     def draw(self, screen, camera):
         sx, sy = camera.apply(self.x, self.y)
+        frame = assets.projectile_frame(
+            self.visual,
+            self.elapsed,
+            self.color if self.visual == "orb" else None,
+        )
+        if frame is not None:
+            if self.visual == "arrow":
+                frame = pg.transform.rotate(frame, -math.degrees(self.angle))
+            elif self.visual == "meteor":
+                frame = assets.scaled(frame, 36, 36)
+            scale = 1.5 if self.aoe_radius > 0 and self.visual == "orb" else 1.0
+            if scale != 1.0:
+                frame = assets.scaled(frame, int(frame.get_width() * scale), int(frame.get_height() * scale))
+            rect = frame.get_rect(center=(sx, sy))
+            screen.blit(frame, rect)
+            return
         pg.draw.circle(screen, self.color, (sx, sy), self.radius)
         pg.draw.circle(screen, (30, 30, 30), (sx, sy), self.radius, 1)

@@ -1,5 +1,6 @@
 import pygame as pg
 
+from core.assets import assets
 from models.item import EQUIP_SLOT_NAMES
 from ui.overlay import UIOverlay
 
@@ -47,10 +48,25 @@ class InventoryUI(UIOverlay):
         gold_surf = self.font_med.render(
             f"Золото: {self.state.gold}", True, (240, 220, 100)
         )
-        screen.blit(gold_surf, ((self.width - gold_surf.get_width()) // 2, 95))
+        gold_icon = assets.named_icon("gold")
+        if gold_icon is not None:
+            gold_icon = assets.scaled(gold_icon, 24, 24)
+            total_w = gold_icon.get_width() + 6 + gold_surf.get_width()
+            gx = (self.width - total_w) // 2
+            screen.blit(gold_icon, (gx, 94))
+            screen.blit(gold_surf, (gx + gold_icon.get_width() + 6, 95))
+        else:
+            screen.blit(gold_surf, ((self.width - gold_surf.get_width()) // 2, 95))
 
         # Сетка
         x0, y0 = self._grid_origin()
+        grid_w = GRID_COLS * (CELL_SIZE + 4) - 4
+        grid_h = GRID_ROWS * (CELL_SIZE + 4) - 4
+        assets.draw_panel(
+            screen,
+            pg.Rect(x0 - 14, y0 - 14, grid_w + 28, grid_h + 28),
+            alpha=225,
+        )
         for row in range(GRID_ROWS):
             for col in range(GRID_COLS):
                 cx = x0 + col * (CELL_SIZE + 4)
@@ -68,9 +84,16 @@ class InventoryUI(UIOverlay):
             cy = y0 + row * (CELL_SIZE + 4)
 
             color = item.icon_color
-            pg.draw.rect(
-                screen, color, (cx + 8, cy + 8, CELL_SIZE - 16, CELL_SIZE - 16)
-            )
+            icon = assets.item_icon(item)
+            if icon is not None:
+                icon = assets.scaled(icon, CELL_SIZE - 14, CELL_SIZE - 14)
+                screen.blit(
+                    icon, icon.get_rect(center=(cx + CELL_SIZE // 2, cy + CELL_SIZE // 2))
+                )
+            else:
+                pg.draw.rect(
+                    screen, color, (cx + 8, cy + 8, CELL_SIZE - 16, CELL_SIZE - 16)
+                )
             pg.draw.rect(
                 screen,
                 item.rarity.color,
@@ -96,8 +119,11 @@ class InventoryUI(UIOverlay):
         y += 30
 
         slots = [s for s in self.state.equipment.keys()]
-        slot_w = 180
         gap = 8
+        slot_w = min(
+            180,
+            max(110, (self.width - 40 - gap * max(0, len(slots) - 1)) // max(1, len(slots))),
+        )
         total_w = len(slots) * (slot_w + gap) - gap
         x_start = (self.width - total_w) // 2
 
@@ -109,10 +135,23 @@ class InventoryUI(UIOverlay):
 
             label = EQUIP_SLOT_NAMES.get(slot, slot.value)
             item = self.state.equipment.get(slot)
-            text = f"{label}: {item.name if item else '—'}"
             color = item.rarity.color if item else (150, 150, 150)
+            text_x = sx + 8
+            if item is not None:
+                icon = assets.item_icon(item)
+                if icon is not None:
+                    icon = assets.scaled(icon, 28, 28)
+                    screen.blit(icon, (sx + 6, y + 8))
+                    text_x = sx + 38
+            name = item.name if item else "—"
+            text = f"{label}: {name}"
+            max_text_w = rect.right - text_x - 6
+            if self.font_small.size(text)[0] > max_text_w:
+                while name and self.font_small.size(f"{label}: {name}…")[0] > max_text_w:
+                    name = name[:-1]
+                text = f"{label}: {name}…"
             surf = self.font_small.render(text, True, color)
-            screen.blit(surf, (sx + 8, y + 13))
+            screen.blit(surf, (text_x, y + 13))
 
     def _draw_tooltip(self, screen, item):
         lines = [f"{item.rarity.display_name} {item.name}"]

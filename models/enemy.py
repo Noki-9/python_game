@@ -23,8 +23,21 @@ class Enemy(Unit):
         xp_reward,
         color,
         loot_rng_seed=0,
+        visual_scale=1.0,
     ):
-        super().__init__("enemy", x, y, rect_x, rect_y, health, speed, color)
+        super().__init__(
+            "enemy",
+            x,
+            y,
+            rect_x,
+            rect_y,
+            health,
+            speed,
+            color,
+            sprite_group="enemies",
+            sprite_key=enemy_id,
+            visual_scale=visual_scale,
+        )
         self.enemy_id = enemy_id
         self.max_health = health
         self.damage = damage
@@ -47,6 +60,7 @@ class Enemy(Unit):
     def take_damage(self, amount) -> bool:
         self.health -= amount
         self.alert_timer = 5.0
+        self.trigger_hurt()
         return self.health <= 0
 
     def drop_loot(self, rng):
@@ -94,6 +108,12 @@ class Enemy(Unit):
                 mvx = hdx / hd * self.speed * 0.4 * dt
                 mvy = hdy / hd * self.speed * 0.4 * dt
 
+        self.moving = bool(mvx or mvy)
+        if self.moving:
+            self.face_delta(mvx, mvy)
+        if self.ai_state in ("attack", "chase"):
+            self.face_towards(px, py)
+
         if mvx or mvy:
             self._try_move(mvx, mvy, walls)
 
@@ -101,6 +121,9 @@ class Enemy(Unit):
         if self.ai_state == "attack" and self.attack_timer <= 0:
             player.take_damage(self.damage)
             self.attack_timer = self.attack_cooldown
+            self.trigger_attack(0.25)
+
+        self.update_animation(dt)
 
     def _try_move(self, dx, dy, walls):
         # По X
@@ -130,11 +153,16 @@ class Enemy(Unit):
     # --- Отрисовка ---
     def draw(self, screen, camera):
         sx, sy = camera.apply(self.x, self.y)
-        pg.draw.rect(screen, self.texture, (sx, sy, self.rect_x, self.rect_y))
-        pg.draw.rect(screen, (20, 20, 20), (sx, sy, self.rect_x, self.rect_y), 1)
+        if not self.draw_sprite(screen, camera):
+            pg.draw.rect(screen, self.texture, (sx, sy, self.rect_x, self.rect_y))
+            pg.draw.rect(
+                screen, (20, 20, 20), (sx, sy, self.rect_x, self.rect_y), 1
+            )
+        sprite_h = int(32 * self.visual_scale)
+        bar_y = sy + self.rect_y - sprite_h + 1
         if self.health < self.max_health:
             ratio = self.health / self.max_health
-            pg.draw.rect(screen, (60, 60, 60), (sx, sy - 6, self.rect_x, 4))
+            pg.draw.rect(screen, (60, 60, 60), (sx, bar_y, self.rect_x, 4))
             pg.draw.rect(
-                screen, (220, 60, 60), (sx, sy - 6, int(self.rect_x * ratio), 4)
+                screen, (220, 60, 60), (sx, bar_y, int(self.rect_x * ratio), 4)
             )

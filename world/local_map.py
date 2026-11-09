@@ -13,12 +13,13 @@ NOISE_AMPLITUDE = 6
 
 
 class LocalMap:
-    def __init__(self, width, height, biome, tiles, spawn_tile):
+    def __init__(self, width, height, biome, tiles, spawn_tile, props=None):
         self.width = width
         self.height = height
         self.biome = biome
         self.tiles = tiles
         self.spawn_tile = spawn_tile
+        self.props = props or []
         self.walls_by_chunk = {}
         self._build_walls_index()
 
@@ -288,6 +289,61 @@ def _find_spawn_near(tiles, cx, cy, w, h, ground, max_r=60):
     return (cx, cy)
 
 
+def _make_props(tiles, w, h, biome, location_type, rng):
+    """Декоративные объекты локации: алтари, костры, сундуки, руины."""
+    cx, cy = w // 2, h // 2
+    props = []
+    occupied = set()
+
+    def free(tx, ty, margin=2):
+        if not (margin <= tx < w - margin and margin <= ty < h - margin):
+            return False
+        if tiles[ty][tx] in WALL_TILES:
+            return False
+        for ox, oy in occupied:
+            if abs(ox - tx) < 3 and abs(oy - ty) < 3:
+                return False
+        return True
+
+    def add(kind, tx, ty):
+        if free(tx, ty):
+            props.append((kind, tx, ty))
+            occupied.add((tx, ty))
+            return True
+        return False
+
+    if location_type.is_settlement:
+        add("campfire", cx + 3, cy + 3)
+        add("well", cx - 4, cy + 4)
+        add("crate", cx + 6, cy - 3)
+        add("crate", cx - 6, cy - 4)
+        add("brazier", cx + 4, cy + 4)
+    elif location_type.is_quest:
+        add("altar", cx, cy)
+        add("brazier", cx - 5, cy - 2)
+        add("brazier", cx + 5, cy - 2)
+        add("ruins", cx - 8, cy + 5)
+        add("ruins", cx + 9, cy + 4)
+        add("chest", cx + 4, cy + 4)
+        if biome == Biome.MOUNTAIN:
+            add("cave", cx - 12, cy - 9)
+        if rng.random() < 0.6:
+            add("grave", cx + 11, cy - 6)
+    else:
+        roll = rng.random()
+        if biome == Biome.MOUNTAIN and roll < 0.45:
+            add("cave", rng.randint(20, w - 20), rng.randint(20, h - 20))
+        elif roll < 0.22:
+            add("ruins", rng.randint(20, w - 20), rng.randint(20, h - 20))
+        elif roll < 0.34:
+            add("chest", rng.randint(20, w - 20), rng.randint(20, h - 20))
+        elif roll < 0.44:
+            add("campfire", rng.randint(20, w - 20), rng.randint(20, h - 20))
+        if rng.random() < 0.25:
+            add("grave", rng.randint(20, w - 20), rng.randint(20, h - 20))
+    return props
+
+
 def generate_local_map(
     biome, seed, neighbors=None, location_type=LocationType.WILD, player_state=None
 ):
@@ -326,4 +382,6 @@ def generate_local_map(
     else:
         spawn_tx, spawn_ty = _find_spawn_near(tiles, cx, cy, w, h, ground)
 
-    return LocalMap(w, h, biome, tiles, (spawn_tx, spawn_ty))
+    props = _make_props(tiles, w, h, biome, location_type, rng)
+
+    return LocalMap(w, h, biome, tiles, (spawn_tx, spawn_ty), props=props)
