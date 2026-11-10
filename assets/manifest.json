@@ -523,7 +523,7 @@
       32,
       32
     ],
-    "cols": 5,
+    "cols": 8,
     "index": {
       "sword": [
         0,
@@ -592,6 +592,46 @@
       "generic": [
         4,
         0
+      ],
+      "dagger": [
+        5,
+        0
+      ],
+      "staff": [
+        5,
+        1
+      ],
+      "bow": [
+        5,
+        2
+      ],
+      "axe": [
+        5,
+        3
+      ],
+      "helmet_leather": [
+        6,
+        0
+      ],
+      "helmet_iron": [
+        7,
+        0
+      ],
+      "armor_leather": [
+        6,
+        1
+      ],
+      "armor_chain": [
+        7,
+        1
+      ],
+      "shield_wood": [
+        6,
+        2
+      ],
+      "shield_iron": [
+        7,
+        2
       ]
     }
   },

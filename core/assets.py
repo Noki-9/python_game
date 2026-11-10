@@ -17,6 +17,42 @@ ASSET_ROOT = Path(__file__).resolve().parent.parent / "assets"
 
 UNIT_GROUPS = ("players", "enemies", "npcs", "animals")
 
+# Иконка по префиксу item_id (sword_iron..., bow_wood..., staff_oak...).
+# Ключи могут быть полными id шаблона: побеждает самый длинный префикс.
+ITEM_ID_ICONS = {
+    "sword": "sword",
+    "dagger": "dagger",
+    "staff": "staff",
+    "bow": "bow",
+    "axe": "axe",
+    "shield": "shield",
+    "helmet": "helmet",
+    "armor": "armor",
+    "gloves": "gloves",
+    "boots": "boots",
+    "amulet": "amulet",
+    "ring": "ring",
+    "shield_wood": "shield_wood",
+    "shield_iron": "shield_iron",
+    "helmet_leather": "helmet_leather",
+    "helmet_iron": "helmet_iron",
+    "armor_leather": "armor_leather",
+    "armor_chain": "armor_chain",
+}
+
+# Запасной вариант — по типу предмета.
+ITEM_TYPE_ICONS = {
+    "weapon": "sword",
+    "shield": "shield",
+    "helmet": "helmet",
+    "armor": "armor",
+    "gloves": "gloves",
+    "boots": "boots",
+    "amulet": "amulet",
+    "ring": "ring",
+    "consumable": "potion",
+}
+
 
 def facing_from_delta(dx: float, dy: float, default: str = "down") -> str:
     if abs(dx) < 0.01 and abs(dy) < 0.01:
@@ -41,6 +77,7 @@ class AssetManager:
         self._images: dict[str, pg.Surface] = {}
         self._tile_cache: dict[tuple, list[pg.Surface]] = {}
         self._frames_cache: dict[tuple, list[pg.Surface]] = {}
+        self._grid_cache: dict[tuple, pg.Surface | None] = {}
         self._tint_cache: dict[tuple, list[pg.Surface]] = {}
         self._scale_cache: dict[tuple, pg.Surface] = {}
         self._tile_colors: dict[str, tuple] = {}
@@ -62,6 +99,7 @@ class AssetManager:
         self._images.clear()
         self._tile_cache.clear()
         self._frames_cache.clear()
+        self._grid_cache.clear()
         self._tint_cache.clear()
         self._scale_cache.clear()
         self._tile_colors.clear()
@@ -313,18 +351,26 @@ class AssetManager:
     # Иконки
     # ------------------------------------------------------------------
     def _grid_frame(self, group, index_name):
+        cache_key = (group, index_name)
+        if cache_key in self._grid_cache:
+            return self._grid_cache[cache_key]
         meta = self.manifest.get(group)
         if not meta:
+            self._grid_cache[cache_key] = None
             return None
         pos = meta.get("index", {}).get(index_name)
         if pos is None:
+            self._grid_cache[cache_key] = None
             return None
         sheet = self.image(meta["sheet"])
         if sheet is None:
+            self._grid_cache[cache_key] = None
             return None
         c, r = pos
         fw, fh = meta.get("frame", [32, 32])
-        return self._sub(sheet, c * fw, r * fh, fw, fh)
+        frame = self._sub(sheet, c * fw, r * fh, fw, fh)
+        self._grid_cache[cache_key] = frame
+        return frame
 
     def named_icon(self, name):
         """Иконка предмета по имени из листа icons (gold, potion, sword...)."""
@@ -332,26 +378,34 @@ class AssetManager:
 
     def item_icon(self, item):
         key = getattr(item, "item_id", "generic")
+        index = self.manifest.get("icons", {}).get("index", {})
+
         if key == "gold":
-            icon_key = "gold"
-        elif getattr(item, "item_type", None) is not None:
-            icon_key = {
-                "weapon": "sword",
-                "shield": "shield",
-                "helmet": "helmet",
-                "armor": "armor",
-                "gloves": "gloves",
-                "boots": "boots",
-                "amulet": "amulet",
-                "ring": "ring",
-                "consumable": "potion",
-                "resource": key,
-            }.get(item.item_type.value, "generic")
-            if icon_key == key and icon_key not in self.manifest.get("icons", {}).get("index", {}):
+            return self.named_icon("gold")
+
+        # Ищем самый длинный ключ, совпадающий с началом item_id:
+        # bow_wood -> bow, helmet_leather -> helmet_leather.
+        best = None
+        for prefix in ITEM_ID_ICONS:
+            if key == prefix or key.startswith(prefix + "_"):
+                if best is None or len(prefix) > len(best):
+                    best = prefix
+        if best is not None:
+            icon_key = ITEM_ID_ICONS[best]
+            if icon_key in index:
+                return self.named_icon(icon_key)
+
+        item_type = getattr(item, "item_type", None)
+        if item_type is not None:
+            type_value = item_type.value
+            icon_key = ITEM_TYPE_ICONS.get(type_value)
+            if type_value == "resource" and key in index:
+                icon_key = key
+            if icon_key not in index:
                 icon_key = "generic"
-        else:
-            icon_key = "generic"
-        return self._grid_frame("icons", icon_key)
+            return self.named_icon(icon_key)
+
+        return self.named_icon("generic")
 
     def ability_icon(self, ability_id):
         return self._grid_frame("abilities", ability_id)
