@@ -5,20 +5,26 @@ import pygame as pg
 
 from core.abilities import get_abilities_for_class, get_ability_for_key
 from core.assets import assets
+from core.status_effects import EFFECT_DEFS
 from core.camera import Camera
 from core.config import TILE_SIZE, screen
 from core.scene_manager import Scene
 from core.utils import direction_name
 from models.player import Player
 from models.projectile import Projectile, visual_for_ability
+from models.resource_node import ResourceNode
+from models.npc import NPC
 from ui.character_ui import CharacterUI
 from ui.dialogue_ui import DialogueUI
 from ui.inventory_ui import InventoryUI
 from ui.quest_log_ui import QuestLogUI
 from ui.skills_ui import SkillsUI
 from world.item_generator import roll_random_equipment
+from world.location_type import LocationType
 from world.loot import GOLD, ITEMS_REGISTRY
 from world.npc_gen import spawn_npcs
+from world.quest import QuestType
+from world.quest_gen import generate_quest
 from world.spawn import spawn_animals, spawn_enemies
 
 COLORS = {
@@ -56,6 +62,11 @@ class LocalScene(Scene):
         self.particles = []
         self.return_pos = None
         self.notifications = []
+        self.opened_props = set()
+        self.objective_pending = False
+        self.objective_kind = None
+        self.objective_quest = None
+        self.escort_npc = None
         self._minimap_cache = None
         self.time = 0.0
 
@@ -89,11 +100,14 @@ class LocalScene(Scene):
         self.projectiles = []
         self.visual_effects = []
         self.particles = []
+        self.opened_props = set(self.segment.opened_props)
         self._minimap_cache = None
         self.time = 0.0
 
         state = self.manager.player_state
         state.restore()
+        if self.segment.location_type.is_settlement:
+            state.remember_village(self.segment.gx, self.segment.gy)
 
         neighbors = self._get_neighbors()
         self.map = self.segment.get_local_map(
@@ -144,11 +158,168 @@ class LocalScene(Scene):
         else:
             self.npcs = []
 
+        self._setup_location_objectives(state)
         self._sync_fetch_quests()
         self._build_minimap()
 
         if self.segment.cleared:
             self.notifications.append(("Локация уже зачищена", 3.0))
+
+    # ================= Цели квестов в локации =================
+    def _find_free_prop_tile(self):
+        rng = random.Random(self.segment.seed + 991)
+        sx, sy = self.map.spawn_tile
+        occupied = {(tx, ty) for _k, tx, ty in getattr(self.map, "props", [])}
+        for obj in self.map.objects:
+            occupied.add((obj.tx, obj.ty))
+        for _ in range(300):
+            tx = rng.randint(max(6, sx - 22), min(self.map.width - 7, sx + 22))
+            ty = rng.randint(max(6, sy - 22), min(self.map.height - 7, sy + 22))
+            if (tx, ty) in occupied:
+                continue
+            if not self.map.is_walkable(tx, ty):
+                continue
+            return tx, ty
+        return None
+
+    def _spawn_escort_npc(self, quest):
+        npc = NPC(
+            npc_id=f"escortee_{quest.quest_id}",
+            name="Путник",
+            role="guard",
+            x=self.player.x - TILE_SIZE,
+            y=self.player.y,
+            rect_x=TILE_SIZE - 8,
+            rect_y=TILE_SIZE - 8,
+            color=(210, 185, 140),
+        )
+        npc.role_title = "Спутник"
+        npc.home_x = npc.x
+        npc.home_y = npc.y
+        self.escort_npc = npc
+
+    def _setup_location_objectives(self, state):
+        self.objective_pending = False
+        self.objective_kind = None
+        self.objective_quest = None
+        self.escort_npc = None
+        active = state.quest_log.active()
+
+        if self.segment.location_type.is_quest and not self.segment.cleared:
+            for q in active:
+                if q.quest_type not in (QuestType.FREE, QuestType.EXPLORE):
+                    continue
+                if (q.target_gx, q.target_gy) != (
+                    self.segment.gx,
+                    self.segment.gy,
+                ):
+                    continue
+                kind = (
+                    "prisoner" if q.quest_type == QuestType.FREE else "artifact"
+                )
+                pos = self._find_free_prop_tile()
+                if pos is not None:
+                    self.map.props.append((kind, pos[0], pos[1]))
+                    self.objective_pending = True
+                    self.objective_kind = kind
+                    self.objective_quest = q
+                break
+
+        # «Найденные» квесты в диких локациях — записки.
+        if (
+            self.segment.location_type == LocationType.WILD
+            and not self.segment.cleared
+        ):
+            rng = random.Random(self.segment.seed + 5150)
+            if rng.random() < 0.22:
+                pos = self._find_free_prop_tile()
+                if pos is not None:
+                    self.map.props.append(("note", pos[0], pos[1]))
+
+        for q in active:
+            if q.quest_type != QuestType.ESCORT:
+                continue
+            if (q.target_gx, q.target_gy) == (
+                self.segment.gx,
+                self.segment.gy,
+            ):
+                finished = state.quest_log.notify_escort_arrived(
+                    self.segment.gx, self.segment.gy
+                )
+                self._on_quests_completed(finished)
+                if finished:
+                    self.notifications.append(
+                        (f"Путник доставлен: {q.objective.target_id}", 3.5)
+                    )
+            else:
+                self._spawn_escort_npc(q)
+            break
+
+    def _update_escort(self, dt):
+        npc = self.escort_npc
+        if npc is None:
+            return
+        px, py = self._player_center()
+        nx = npc.x + npc.rect_x / 2
+        ny = npc.y + npc.rect_y / 2
+        dx, dy = px - nx, py - ny
+        dist = math.hypot(dx, dy)
+        if dist > 52:
+            step = min(dist - 44, 220 * dt)
+            tx = npc.x + dx / dist * step
+            ty = npc.y + dy / dist * step
+            ttx = int((tx + npc.rect_x / 2) // TILE_SIZE)
+            tty = int((ty + npc.rect_y / 2) // TILE_SIZE)
+            if self.map.is_walkable(ttx, tty):
+                npc.x, npc.y = tx, ty
+                npc.moving = True
+                npc.face_delta(dx, dy)
+        npc.update_animation(dt)
+
+    def _draw_quest_prop(self, screen, kind, tx, ty):
+        sx, sy = self.camera.apply(tx * TILE_SIZE, ty * TILE_SIZE)
+        if not (
+            -64 < sx < self.camera.view_w + 64
+            and -64 < sy < self.camera.view_h + 64
+        ):
+            return
+        cx, cy = sx + TILE_SIZE // 2, sy + TILE_SIZE // 2
+        bob = int(math.sin(self.time * 2.5 + tx + ty) * 2)
+        if kind == "artifact":
+            pg.draw.circle(screen, (230, 200, 90), (cx, cy + bob), 11, 2)
+            pg.draw.polygon(
+                screen,
+                (255, 240, 160),
+                [
+                    (cx, cy - 8 + bob),
+                    (cx + 7, cy + bob),
+                    (cx, cy + 8 + bob),
+                    (cx - 7, cy + bob),
+                ],
+            )
+            pg.draw.circle(screen, (255, 255, 220), (cx - 2, cy - 3 + bob), 2)
+        elif kind == "prisoner":
+            pg.draw.rect(screen, (70, 60, 50), (sx + 6, sy + 6, 20, 24), border_radius=3)
+            pg.draw.rect(screen, (190, 170, 140), (sx + 11, sy + 9, 10, 10), border_radius=5)
+            for i in range(3):
+                pg.draw.line(
+                    screen,
+                    (150, 140, 120),
+                    (sx + 9 + i * 7, sy + 6),
+                    (sx + 9 + i * 7, sy + 30),
+                    2,
+                )
+            pg.draw.rect(screen, (220, 200, 150), (sx + 14, sy + 20, 4, 8))
+        else:  # note
+            pg.draw.rect(screen, (230, 220, 180), (sx + 9, sy + 10 + bob, 14, 18))
+            for i in range(4):
+                pg.draw.line(
+                    screen,
+                    (120, 110, 90),
+                    (sx + 11, sy + 14 + i * 3 + bob),
+                    (sx + 21, sy + 14 + i * 3 + bob),
+                    1,
+                )
 
     def on_exit(self):
         self.segment.reset_if_unfinished()
@@ -177,8 +348,10 @@ class LocalScene(Scene):
     def handle_event(self, event):
         if event.type == pg.KEYDOWN:
             if event.key == pg.K_ESCAPE:
+                from core.save_load import save_game
                 from scenes.world_scene import WorldScene
 
+                save_game(self.manager.world, self.manager.player_state, slot="auto")
                 self.manager.switch(
                     WorldScene(self.manager, self.manager.world),
                     world_pos=self.return_pos,
@@ -205,6 +378,15 @@ class LocalScene(Scene):
                     QuestLogUI(screen.get_size(), self.manager.player_state)
                 )
                 return
+            if event.key == pg.K_t:
+                self._try_rest()
+                return
+            if event.key == pg.K_b:
+                self._open_camp_craft()
+                return
+            if event.key == pg.K_x:
+                self._toggle_stealth()
+                return
             if event.key == pg.K_q:
                 self._cast_ability("Q")
                 return
@@ -225,8 +407,25 @@ class LocalScene(Scene):
                             world=self.manager.world,
                         )
                     )
-                else:
-                    self._try_interact()
+                    return
+                node = self._find_resource_near()
+                if node is not None:
+                    self._gather_resource(node)
+                    return
+                if self.objective_pending:
+                    objective = self._find_prop_near({self.objective_kind})
+                    if objective is not None:
+                        self._complete_objective()
+                        return
+                note = self._find_prop_near({"note"})
+                if note is not None:
+                    self._open_note(note)
+                    return
+                prop = self._find_chest_near()
+                if prop is not None:
+                    self._open_chest(prop)
+                    return
+                self._try_interact()
             elif event.key == pg.K_SPACE:
                 self._player_attack()
 
@@ -269,6 +468,17 @@ class LocalScene(Scene):
                 ]
             )
 
+    def _toggle_stealth(self):
+        s = self.manager.player_state
+        if s.class_id not in ("rogue", "archer"):
+            self.notifications.append(("Скрытность доступна плуту и лучнику", 1.6))
+            return
+        s.stealth = not s.stealth
+        if s.stealth:
+            self.notifications.append(("Скрытность включена", 1.2))
+        else:
+            self.notifications.append(("Скрытность выключена", 1.2))
+
     def _cast_ability(self, key):
         s = self.manager.player_state
         ability = get_ability_for_key(s.class_id, key)
@@ -282,6 +492,7 @@ class LocalScene(Scene):
         if not s.try_spend_ability(ability):
             return
 
+        s.stealth = False
         self.player.trigger_attack(0.3)
         if ability.is_projectile:
             self._cast_projectile(ability)
@@ -291,6 +502,18 @@ class LocalScene(Scene):
             self._cast_aoe_self(ability)
         elif ability.is_single_target:
             self._cast_single_target(ability)
+
+    @staticmethod
+    def _apply_ability_effect(ability, target):
+        if not ability.effect:
+            return
+        if random.random() > ability.effect_chance:
+            return
+        target.apply_status(
+            ability.effect,
+            ability.effect_duration or None,
+            ability.effect_power or None,
+        )
 
     def _cast_projectile(self, ability):
         mx, my = pg.mouse.get_pos()
@@ -325,6 +548,10 @@ class LocalScene(Scene):
                     lifetime=lifetime,
                     aoe_radius=ability.aoe_radius,
                     visual=visual_for_ability(ability.ability_id),
+                    effect=ability.effect,
+                    effect_chance=ability.effect_chance,
+                    effect_duration=ability.effect_duration,
+                    effect_power=ability.effect_power,
                 )
             )
 
@@ -350,7 +577,9 @@ class LocalScene(Scene):
                 ex = t.x + t.rect_x / 2
                 ey = t.y + t.rect_y / 2
                 if math.hypot(ex - wx, ey - wy) <= radius:
-                    if t.take_damage(damage):
+                    killed = t.take_damage(damage)
+                    self._apply_ability_effect(ability, t)
+                    if killed:
                         self._on_enemy_killed(t)
 
         self.visual_effects.append(
@@ -371,7 +600,9 @@ class LocalScene(Scene):
                 ex = t.x + t.rect_x / 2
                 ey = t.y + t.rect_y / 2
                 if math.hypot(ex - pcx, ey - pcy) <= radius:
-                    if t.take_damage(damage):
+                    killed = t.take_damage(damage)
+                    self._apply_ability_effect(ability, t)
+                    if killed:
                         self._on_enemy_killed(t)
 
         if ability.heal > 0:
@@ -403,7 +634,9 @@ class LocalScene(Scene):
             return
 
         damage = int(self.manager.player_state.attack_damage * ability.damage_mult)
-        if best.take_damage(damage):
+        killed = best.take_damage(damage)
+        self._apply_ability_effect(ability, best)
+        if killed:
             self._on_enemy_killed(best)
 
         self.visual_effects.append(
@@ -424,6 +657,19 @@ class LocalScene(Scene):
             count=10,
             speed=100,
         )
+
+    def _has_target_in_range(self):
+        cx, cy = self._player_center()
+        attack_range = self.manager.player_state.attack_range
+        for target in list(self.enemies) + list(self.animals):
+            if not target.is_alive():
+                continue
+            if math.hypot(
+                target.x + target.rect_x / 2 - cx,
+                target.y + target.rect_y / 2 - cy,
+            ) <= attack_range:
+                return True
+        return False
 
     # ================= Атака =================
     def _player_attack(self):
@@ -491,6 +737,10 @@ class LocalScene(Scene):
                     4.0,
                 )
             )
+        if finished:
+            from core.save_load import save_game
+
+            save_game(self.manager.world, state, slot="auto")
 
     def _sync_fetch_quests(self):
         state = self.manager.player_state
@@ -501,6 +751,8 @@ class LocalScene(Scene):
         if not self.segment.location_type.is_quest:
             return
         if self.segment.cleared:
+            return
+        if self.objective_pending:
             return
         if not self.enemies:
             return
@@ -517,7 +769,18 @@ class LocalScene(Scene):
         state = self.manager.player_state
         state.add_gold(100)
         state.add_xp(250)
-        self.notifications.append(("Локация зачищена! +100 золота, +250 XP", 4.0))
+        state.reputation += 5
+        rng = random.Random(self.segment.seed + 7331)
+        reward_item = roll_random_equipment(rng)
+        if reward_item is not None:
+            state.add_item(reward_item)
+            self.notifications.append((f"Награда: {reward_item.name}", 4.5))
+        self.notifications.append(
+            ("Локация зачищена! +100 золота, +250 XP, +5 репутации", 4.0)
+        )
+        from core.save_load import save_game
+
+        save_game(self.manager.world, state, slot="auto")
         if self.segment.poi:
             finished = state.quest_log.notify_location_cleared(self.segment.poi.name)
             self._on_quests_completed(finished)
@@ -546,6 +809,164 @@ class LocalScene(Scene):
                 best_d = d
         return best
 
+    def _player_center(self):
+        return (
+            self.player.x + self.player.rect_x / 2,
+            self.player.y + self.player.rect_y / 2,
+        )
+
+    def _find_resource_near(self):
+        px, py = self._player_center()
+        best = None
+        best_d = NPC_INTERACT_RADIUS
+        for obj in self.map.objects:
+            if not isinstance(obj, ResourceNode) or obj.depleted:
+                continue
+            d = math.hypot(obj.x + obj.rect_x / 2 - px, obj.y + obj.rect_y / 2 - py)
+            if d < best_d:
+                best = obj
+                best_d = d
+        return best
+
+    def _find_prop_near(self, kinds):
+        px, py = self._player_center()
+        best = None
+        best_d = NPC_INTERACT_RADIUS
+        for kind, tx, ty in getattr(self.map, "props", []):
+            if kinds is not None and kind not in kinds:
+                continue
+            if (kind, tx, ty) in self.opened_props:
+                continue
+            cx = tx * TILE_SIZE + TILE_SIZE / 2
+            cy = ty * TILE_SIZE + TILE_SIZE / 2
+            d = math.hypot(cx - px, cy - py)
+            if d < best_d:
+                best = (kind, tx, ty)
+                best_d = d
+        return best
+
+    def _find_chest_near(self):
+        return self._find_prop_near({"chest"})
+
+    def _gather_resource(self, node):
+        state = self.manager.player_state
+        template = ITEMS_REGISTRY.get(node.resource_id)
+        if template is None:
+            return
+        item = template.copy()
+        item.count = node.amount
+        state.add_item(item)
+        node.depleted = True
+        state.add_xp(3)
+        self.notifications.append((f"+{item.count} {item.name}", 1.8))
+        cx = node.x + node.rect_x / 2
+        cy = node.y + node.rect_y / 2
+        self._spawn_particles(cx, cy, item.icon_color, count=8, speed=80)
+        self._sync_fetch_quests()
+
+    def _open_chest(self, prop):
+        _kind, tx, ty = prop
+        self.opened_props.add(prop)
+        self.segment.opened_props.add(prop)
+        state = self.manager.player_state
+        rng = random.Random(
+            (self.segment.seed * 73856093) ^ (tx * 19349663) ^ (ty * 83492791)
+        )
+        gold = rng.randint(15, 50)
+        state.add_gold(gold)
+        self.notifications.append((f"Сундук: +{gold} золота", 2.0))
+        if rng.random() < 0.55:
+            equip = roll_random_equipment(rng)
+            if equip:
+                state.add_item(equip)
+                self.notifications.append((f"Найдено: {equip.name}", 2.5))
+        cx = tx * TILE_SIZE + TILE_SIZE / 2
+        cy = ty * TILE_SIZE + TILE_SIZE / 2
+        self._add_fx("pickup", cx, cy, (255, 220, 120), 24, 0.5)
+        self._spawn_particles(cx, cy, (255, 220, 120), count=12, speed=110)
+
+    def _complete_objective(self):
+        if not self.objective_pending:
+            return
+        prop = self._find_prop_near({self.objective_kind})
+        if prop is None:
+            return
+        if prop in self.map.props:
+            self.map.props.remove(prop)
+        self.objective_pending = False
+        state = self.manager.player_state
+        label = (
+            "Пленник освобождён"
+            if self.objective_kind == "prisoner"
+            else "Артефакт найден"
+        )
+        self.notifications.append((label, 3.0))
+        cx = prop[1] * TILE_SIZE + TILE_SIZE / 2
+        cy = prop[2] * TILE_SIZE + TILE_SIZE / 2
+        self._add_fx("pickup", cx, cy, (255, 230, 120), 32, 0.6)
+        self._spawn_particles(cx, cy, (255, 230, 120), count=16, speed=120)
+        quest = self.objective_quest
+        self.objective_quest = None
+        if quest is not None:
+            finished = state.quest_log.notify_objective(quest.objective.target_id)
+            self._on_quests_completed(finished)
+        self._complete_quest()
+
+    def _open_note(self, prop):
+        if prop in self.map.props:
+            self.map.props.remove(prop)
+        world = getattr(self.manager, "world", None)
+        state = self.manager.player_state
+        if world is None:
+            self.notifications.append(("Записка истлела", 1.6))
+            return
+        from types import SimpleNamespace
+
+        seed = (
+            self.segment.seed * 7331 + prop[1] * 131 + prop[2] * 17
+        ) & 0xFFFFFFFF
+        giver = SimpleNamespace(
+            npc_id=f"note_{self.segment.seed}_{prop[1]}_{prop[2]}",
+            name="Найденная записка",
+        )
+        quest = generate_quest(
+            world, giver, seed, state.level, state.gx, state.gy
+        )
+        if state.quest_log.add(quest):
+            self.notifications.append((f"Найден квест: {quest.title}", 3.5))
+        else:
+            self.notifications.append(
+                ("Записка не содержит нового задания", 2.0)
+            )
+
+    def _try_rest(self):
+        state = self.manager.player_state
+        in_settlement = self.segment.location_type.is_settlement
+        campfire = self._find_prop_near({"campfire"})
+        if not in_settlement and campfire is None:
+            self.notifications.append(("Отдых возможен в деревне или у костра", 1.8))
+            return
+        state.rest(full=in_settlement)
+        label = "Полный отдых" if in_settlement else "Отдых у костра"
+        self.notifications.append((f"{label}: силы восстановлены", 2.0))
+        self._add_fx("heal", *self._player_center(), (120, 255, 160), 42, 0.6)
+
+    def _open_camp_craft(self):
+        if self._find_prop_near({"campfire"}) is None:
+            self.notifications.append(("Нужен костёр для крафта", 1.6))
+            return
+        from ui.craft_ui import CraftUI
+        from world.crafting import CAMP_RECIPES
+
+        self.manager.push_ui(
+            CraftUI(
+                screen.get_size(),
+                self.manager.player_state,
+                recipes=CAMP_RECIPES,
+                title="Костёр — простой крафт",
+            )
+        )
+
     # ================= Update =================
     def update(self, dt):
         if not self.player.is_alive():
@@ -557,6 +978,17 @@ class LocalScene(Scene):
         state = self.manager.player_state
         state.tick_ability_cooldowns(dt)
         state.regen_mana(dt)
+        if state.tick_status(dt):
+            self._on_player_death()
+            return
+
+        self._tick_enemy_statuses(dt)
+        self._group_alert()
+
+        # Автоатака при зажатой ЛКМ (ТЗ 9).
+        if pg.mouse.get_pressed()[0] and self.player.attack_timer <= 0:
+            if self._has_target_in_range():
+                self._player_attack()
 
         nearby = self.map.walls_near(
             self.player.x + self.player.rect_x / 2,
@@ -567,6 +999,7 @@ class LocalScene(Scene):
             dt, walls=nearby, map_w_px=self.map_w_px, map_h_px=self.map_h_px
         )
         self.camera.follow(self.player, self.map_w_px, self.map_h_px)
+        self._update_escort(dt)
 
         for e in self.enemies:
             if not e.is_alive():
@@ -626,6 +1059,39 @@ class LocalScene(Scene):
             (txt, t - dt) for txt, t in self.notifications if t - dt > 0
         ]
 
+    def _tick_enemy_statuses(self, dt):
+        for unit in list(self.enemies) + list(self.animals):
+            if not unit.is_alive():
+                continue
+            damage = unit.status.tick(dt)
+            if damage <= 0:
+                continue
+            unit.health -= damage
+            unit.trigger_hurt()
+            if unit.health <= 0:
+                self._on_enemy_killed(unit)
+
+    def _group_alert(self):
+        """Раненый/заметивший игрока враг поднимает тревогу у соседей."""
+        alerted = [
+            e
+            for e in self.enemies
+            if e.is_alive() and e.alert_timer > 0
+        ]
+        if not alerted:
+            return
+        for e in self.enemies:
+            if not e.is_alive() or e.alert_timer > 0:
+                continue
+            ex = e.x + e.rect_x / 2
+            ey = e.y + e.rect_y / 2
+            for other in alerted:
+                ox = other.x + other.rect_x / 2
+                oy = other.y + other.rect_y / 2
+                if math.hypot(ox - ex, oy - ey) < 200:
+                    e.alert_timer = 4.0
+                    break
+
     def _collect_drops(self):
         state = self.manager.player_state
         remaining = []
@@ -657,14 +1123,21 @@ class LocalScene(Scene):
         state = self.manager.player_state
         lost = state.gold // 5
         state.gold -= lost
+        # Потеря одного случайного предмета из инвентаря.
+        if state.inventory:
+            drop_idx = random.randrange(len(state.inventory))
+            state.inventory.pop(drop_idx)
         state.hp = state.max_hp
         state.stamina = state.max_stamina
         state.mana = float(state.max_mana)
+        state.status.clear()
+        world = self.manager.world
+        respawn = state.last_village or (world.start_gx, world.start_gy)
         from scenes.world_scene import WorldScene
 
         self.manager.switch(
-            WorldScene(self.manager, self.manager.world),
-            world_pos=(self.manager.world.start_gx, self.manager.world.start_gy),
+            WorldScene(self.manager, world),
+            world_pos=respawn,
             mode="play",
         )
 
@@ -712,6 +1185,9 @@ class LocalScene(Scene):
     # ---------- Пропсы и сущности ----------
     def _draw_props(self, screen):
         for kind, tx, ty in getattr(self.map, "props", []):
+            if kind in ("prisoner", "artifact", "note"):
+                self._draw_quest_prop(screen, kind, tx, ty)
+                continue
             image = assets.prop(kind, self.time)
             if image is None:
                 continue
@@ -741,6 +1217,14 @@ class LocalScene(Scene):
                 drawables.append((e.y + e.rect_y, "unit", e))
         for npc in self.npcs:
             drawables.append((npc.y + npc.rect_y, "npc", npc))
+        if self.escort_npc is not None:
+            drawables.append(
+                (
+                    self.escort_npc.y + self.escort_npc.rect_y,
+                    "npc",
+                    self.escort_npc,
+                )
+            )
         drawables.append((self.player.y + self.player.rect_y, "unit", self.player))
         drawables.sort(key=lambda item: item[0])
         for _y, kind, obj in drawables:
@@ -866,6 +1350,22 @@ class LocalScene(Scene):
                 (200, 220, 250),
             )
             screen.blit(surf, (10, y))
+            y += 18
+
+        if s.status.effects:
+            names = ", ".join(
+                EFFECT_DEFS[k]["name"]
+                for k in s.status.active_kinds()
+                if k in EFFECT_DEFS
+            )
+            surf = self._font_hud.render(f"Эффекты: {names}", True, (255, 150, 120))
+            screen.blit(surf, (10, y))
+            y += 18
+
+        if s.stealth:
+            surf = self._font_hud.render("Скрытность: вкл [X]", True, (150, 220, 255))
+            screen.blit(surf, (10, y))
+            y += 18
 
         # === Навигация ===
         y += 20
@@ -1078,12 +1578,29 @@ class LocalScene(Scene):
 
     def _draw_hint(self, screen):
         npc = self._find_npc_near() if self.npcs else None
+        node = self._find_resource_near()
+        chest = self._find_chest_near()
         if npc:
             text = f"E — поговорить с {npc.name} | Q F R — умения | I C K J | Esc"
+        elif node is not None:
+            text = f"E — собрать: {node.display_name} | ЛКМ — атака | I C K J | Esc"
+        elif chest is not None:
+            text = "E — открыть сундук | ЛКМ — атака | I C K J | Esc"
+        elif self.objective_pending:
+            label = (
+                "освободить пленника"
+                if self.objective_kind == "prisoner"
+                else "забрать артефакт"
+            )
+            text = f"E — {label} | ЛКМ — атака | I C K J | Esc"
+        elif self._find_prop_near({"note"}) is not None:
+            text = "E — прочитать записку | ЛКМ — атака | I C K J | Esc"
+        elif self.segment.location_type.is_settlement:
+            text = "T — отдохнуть | E — диалог | Q F R — умения | I C K J | Esc"
         elif self.segment.location_type.is_quest and not self.segment.cleared:
-            text = "WASD | ЛКМ — атака | Q F R — умения | E — взаимодействие | Esc"
+            text = "WASD | ЛКМ — атака | Q F R — умения | X — скрытность | Esc"
         else:
-            text = "WASD | ЛКМ — атака | Q F R — умения | I C K J | Esc"
+            text = "WASD | ЛКМ — атака | Q F R — умения | E — собрать | X — скрытность | Esc"
         surf = self._font_hint.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)

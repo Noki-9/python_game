@@ -29,6 +29,10 @@ class Projectile:
         lifetime=1.5,
         aoe_radius=0,
         visual="orb",
+        effect="",
+        effect_chance=1.0,
+        effect_duration=0.0,
+        effect_power=0.0,
     ):
         self.x = x
         self.y = y
@@ -40,6 +44,10 @@ class Projectile:
         self.lifetime = lifetime
         self.aoe_radius = aoe_radius
         self.visual = visual
+        self.effect = effect
+        self.effect_chance = effect_chance
+        self.effect_duration = effect_duration
+        self.effect_power = effect_power
         self.alive = True
         self.elapsed = 0.0
         self.angle = math.atan2(vy, vx)
@@ -100,11 +108,23 @@ class Projectile:
 
                 if self.aoe_radius > 0:
                     if math.hypot(ex - self.x, ey - self.y) <= self.aoe_radius:
-                        if t.take_damage(self.damage):
+                        if t.take_damage(
+                            self.damage,
+                            self.effect,
+                            self.effect_chance,
+                            self.effect_duration,
+                            self.effect_power,
+                        ):
                             killed.append(t)
                 else:
                     if math.hypot(ex - self.x, ey - self.y) < self.radius + tr:
-                        if t.take_damage(self.damage):
+                        if t.take_damage(
+                            self.damage,
+                            self.effect,
+                            self.effect_chance,
+                            self.effect_duration,
+                            self.effect_power,
+                        ):
                             killed.append(t)
                         return killed
         return killed

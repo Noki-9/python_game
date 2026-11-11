@@ -1,6 +1,7 @@
 import pygame as pg
 
 from core.assets import assets, facing_from_delta
+from core.status_effects import StatusEffectSet
 
 
 class Unit:
@@ -39,6 +40,12 @@ class Unit:
         self.anim_clip = "idle"
         self.attack_anim = 0.0
         self.hurt_anim = 0.0
+
+        # --- Статус-эффекты ---
+        self.status = StatusEffectSet()
+
+    def apply_status(self, kind, duration=None, power=None):
+        return self.status.apply(kind, duration, power)
 
     def sync_rect(self):
         """Переносит x, y в Rect. Вызывать после любого изменения позиции."""

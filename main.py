@@ -1,29 +1,20 @@
-from random import randint
-
 import pygame as pg
 
 from core.config import clock, screen
-from core.player_state import PlayerState
 from core.scene_manager import SceneManager
-from scenes.world_scene import WorldScene
-from world.world_map import WorldMap
+from scenes.menu_scene import MenuScene
 
 
 def main():
     pg.init()
     manager = SceneManager()
-    world = WorldMap(seed=randint(1000, 9999))
-    manager.world = world
-    manager.player_state = PlayerState(class_id="mage")
+    manager.switch(MenuScene(manager))
 
-    manager.switch(WorldScene(manager, world, mode="spawn"))
-
-    running = True
-    while running:
+    while manager.running:
         dt = clock.tick(60) / 1000
         for event in pg.event.get():
             if event.type == pg.QUIT:
-                running = False
+                manager.running = False
             else:
                 manager.handle_event(event)
         manager.update(dt)

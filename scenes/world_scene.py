@@ -87,6 +87,8 @@ class WorldScene(Scene):
         self._minimap_surf = None
         self._minimap_dirty = True
         self._minimap_full = None
+        self.message = ""
+        self.message_timer = 0.0
 
         self._ensure_prerender()
 
@@ -121,6 +123,8 @@ class WorldScene(Scene):
                 (gx * SEG_SIZE, gy * SEG_SIZE, SEG_SIZE, SEG_SIZE),
             )
 
+        self._draw_terrain_features(surf)
+
         for (gx, gy), seg in self.world.segments.items():
             for direction, (dx, dy) in (
                 ("N", (0, -1)),
@@ -150,6 +154,52 @@ class WorldScene(Scene):
                         surf, gx, gy, direction, seg.biome.color, nbr.biome.color
                     )
         self.world._prerender = surf
+
+    def _draw_terrain_features(self, surface):
+        """Реки, озёра, броды/мосты и дороги поверх биомов."""
+        for gx, gy in self.world.lakes:
+            pg.draw.rect(
+                surface,
+                (42, 96, 176),
+                (gx * SEG_SIZE, gy * SEG_SIZE, SEG_SIZE, SEG_SIZE),
+            )
+        for gx, gy in self.world.rivers:
+            pg.draw.rect(
+                surface,
+                (58, 128, 205),
+                (gx * SEG_SIZE + 2, gy * SEG_SIZE, SEG_SIZE - 4, SEG_SIZE),
+            )
+            pg.draw.rect(
+                surface,
+                (96, 170, 230),
+                (gx * SEG_SIZE + 5, gy * SEG_SIZE, 2, SEG_SIZE),
+            )
+        for gx, gy in self.world.roads:
+            sx, sy = gx * SEG_SIZE, gy * SEG_SIZE
+            sx += SEG_SIZE // 2
+            sy += SEG_SIZE // 2
+            pg.draw.rect(surface, (178, 156, 112), (sx - 2, sy - 2, 4, 4))
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                if (gx + dx, gy + dy) in self.world.roads:
+                    pg.draw.rect(
+                        surface,
+                        (178, 156, 112),
+                        (
+                            sx - 2 + dx * 4,
+                            sy - 2 + dy * 4,
+                            max(2, 8 if dx else 4),
+                            max(2, 8 if dy else 4),
+                        ),
+                    )
+        for gx, gy in self.world.crossings:
+            seg = self.world.get(gx, gy)
+            if seg is None:
+                continue
+            sx, sy = gx * SEG_SIZE, gy * SEG_SIZE
+            color = (150, 110, 62) if seg.bridge else (206, 196, 150)
+            pg.draw.rect(
+                surface, color, (sx + 2, sy + SEG_SIZE // 2 - 3, SEG_SIZE - 4, 6)
+            )
 
     def _draw_edge_dither(
         self, surface, gx, gy, direction, base, nbr_color, max_thickness=5
@@ -243,6 +293,14 @@ class WorldScene(Scene):
     # ================= Ввод =================
     def handle_event(self, event):
         if event.type == pg.KEYDOWN:
+            if event.key == pg.K_F5:
+                from core.save_load import save_game
+
+                if save_game(self.world, self.state, slot="manual"):
+                    self._flash("Игра сохранена")
+                else:
+                    self._flash("Ошибка сохранения")
+                return
             if event.key == pg.K_i:
                 self.manager.push_ui(InventoryUI(screen.get_size(), self.state))
                 return
@@ -273,6 +331,12 @@ class WorldScene(Scene):
             return
         if event.type != pg.KEYDOWN:
             return
+        if event.key == pg.K_r:
+            self._rest_here()
+            return
+        if event.key == pg.K_t:
+            self._open_fast_travel()
+            return
         dx = dy = 0
         if event.key == pg.K_w:
             dy = -1
@@ -286,12 +350,51 @@ class WorldScene(Scene):
             self._try_step(dx, dy)
         if event.key == pg.K_RETURN:
             seg = self.world.get(self.gx, self.gy)
-            if seg and seg.biome.walkable:
+            if seg and self.world.is_passable(self.gx, self.gy):
                 from scenes.local_scene import LocalScene
 
                 self.manager.switch(
                     LocalScene(self.manager, seg), return_pos=(self.gx, self.gy)
                 )
+
+    def _rest_here(self):
+        seg = self.world.get(self.gx, self.gy)
+        if seg is None or not seg.location_type.is_settlement:
+            self._flash("Отдых возможен только в деревне")
+            return
+        self.state.rest(full=True)
+        self.state.remember_village(self.gx, self.gy)
+        self._flash("Отдых в деревне: силы, HP и мана восстановлены")
+
+    def _open_fast_travel(self):
+        if not self.state.visited_villages:
+            self._flash("Сначала посетите хотя бы одну деревню")
+            return
+        from ui.fast_travel_ui import FastTravelUI
+
+        self.manager.push_ui(FastTravelUI(screen.get_size(), self.state, self))
+
+    def fast_travel_to(self, gx, gy):
+        if (gx, gy) not in self.state.visited_villages:
+            self._flash("Эта деревня ещё не открыта")
+            return
+        if (gx, gy) == (self.gx, self.gy):
+            self._flash("Вы уже здесь")
+            return
+        dist = math.hypot(gx - self.gx, gy - self.gy)
+        cost = max(10, int(dist * 1.5))
+        if self.state.gold < cost:
+            self._flash(f"Нужно {cost} золота для быстрого пути")
+            return
+        self.state.gold -= cost
+        self.gx, self.gy = gx, gy
+        self._reveal_around_player()
+        self._center_camera()
+        self._flash(f"Быстрое перемещение: -{cost} золота")
+
+    def _flash(self, text, duration=2.5):
+        self.message = text
+        self.message_timer = duration
 
     def _handle_waypoint_click(self, screen_pos):
         gx, gy = self._screen_to_segment_any(screen_pos)
@@ -335,23 +438,30 @@ class WorldScene(Scene):
         sx, sy = screen_pos
         gx = int((sx + self.camera.x) // SEG_SIZE)
         gy = int((sy + self.camera.y) // SEG_SIZE)
-        seg = self.world.get(gx, gy)
-        if seg is None or not seg.biome.walkable:
+        if not self.world.is_passable(gx, gy):
             return None, None
         return gx, gy
 
     def _can_move(self, dx, dy):
-        seg = self.world.get(self.gx + dx, self.gy + dy)
-        return seg is not None and seg.biome.walkable
+        return self.world.is_passable(self.gx + dx, self.gy + dy)
 
     def _move_cost(self, dx, dy):
         seg = self.world.get(self.gx + dx, self.gy + dy)
         if seg is None:
             return 999
-        return BIOME_MOVE_COST.get(seg.biome, DEFAULT_MOVE_COST)
+        if seg.road:
+            return 1
+        if seg.river:
+            return 2
+        return (
+            BIOME_MOVE_COST.get(seg.biome, DEFAULT_MOVE_COST)
+            + self.state.travel_penalty
+        )
 
     # ================= Update =================
     def update(self, dt):
+        if self.message_timer > 0:
+            self.message_timer -= dt
         if self.mode == "play":
             self._reveal_around_player()
             return
@@ -414,6 +524,7 @@ class WorldScene(Scene):
         self._draw_hud(screen)
         self._draw_minimap(screen)
         self._draw_hint(screen)
+        self._draw_message(screen)
 
     def _draw_pois(self, screen, cam_x, cam_y):
         t = pg.time.get_ticks() / 1000.0
@@ -661,7 +772,15 @@ class WorldScene(Scene):
                     if seg is None:
                         continue
                     if show_full or seg.explored:
-                        base.set_at((gx, gy), seg.biome.color)
+                        if (gx, gy) in self.world.lakes:
+                            color = (46, 100, 180)
+                        elif (gx, gy) in self.world.rivers:
+                            color = (64, 136, 210)
+                        elif (gx, gy) in self.world.roads:
+                            color = (188, 166, 120)
+                        else:
+                            color = seg.biome.color
+                        base.set_at((gx, gy), color)
             self._minimap_surf = base
             self._minimap_dirty = False
             self._minimap_full = show_full
@@ -732,13 +851,25 @@ class WorldScene(Scene):
             pg.draw.circle(screen, (255, 60, 60), (px, py), 4)
             pg.draw.circle(screen, (255, 255, 255), (px, py), 4, 1)
 
+    def _draw_message(self, screen):
+        if self.message_timer <= 0 or not self.message:
+            return
+        surf = self._font_hint.render(self.message, True, (255, 235, 150))
+        bg = pg.Surface((surf.get_width() + 20, surf.get_height() + 10))
+        bg.set_alpha(190)
+        bg.fill((0, 0, 0))
+        x = (screen.get_width() - bg.get_width()) // 2
+        y = 120
+        screen.blit(bg, (x, y))
+        screen.blit(surf, (x + 10, y + 5))
+
     def _draw_hint(self, screen):
         if self.mode == "spawn":
             text = "ЛКМ / Enter — выбрать старт | WASD — панорама | I C K J"
         elif self.state.stamina > 0:
-            text = "WASD — шаг | ПКМ — метка | Enter — войти | I C K J"
+            text = "WASD — шаг | R — отдых | T — быстрый путь | ПКМ — метка | Enter — войти"
         else:
-            text = "Нет сил — Enter для отдыха | ПКМ — метка | I C K J"
+            text = "Нет сил — R в деревне | T — быстрый путь | ПКМ — метка"
         surf = self._font_hint.render(text, True, (230, 230, 230))
         bg = pg.Surface((surf.get_width() + 16, surf.get_height() + 8))
         bg.set_alpha(160)

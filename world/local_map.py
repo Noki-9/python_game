@@ -2,6 +2,7 @@ import random
 
 from core.config import CHUNK_SIZE, LOCAL_H, LOCAL_W, TILE_SIZE
 from core.noise import ValueNoise
+from models.resource_node import ResourceNode
 from models.world_object import WorldObject
 from world.biome import Biome
 from world.location_type import LocationType
@@ -340,6 +341,55 @@ def _extract_vegetation(tiles, w, h, ground):
     return objects
 
 
+RESOURCE_COUNTS = {
+    Biome.FOREST: {"herb": 6, "log": 5, "ore": 1},
+    Biome.PLAINS: {"herb": 5, "log": 3, "ore": 1},
+    Biome.DESERT: {"herb": 1, "ore": 3, "log": 1},
+    Biome.TUNDRA: {"herb": 2, "ore": 3, "log": 2},
+    Biome.MOUNTAIN: {"herb": 1, "ore": 7, "log": 1},
+    Biome.OCEAN: {},
+}
+
+
+def _make_resources(tiles, w, h, biome, location_type, rng, blocked):
+    """Собираемые ресурсы: руда, травы, дерево. В деревнях их нет."""
+    if location_type.is_settlement:
+        return []
+    counts = RESOURCE_COUNTS.get(biome, {})
+    if not counts:
+        return []
+
+    occupied = set(blocked)
+    cx, cy = w // 2, h // 2
+    nodes = []
+
+    for kind, count in counts.items():
+        if location_type.is_quest:
+            count = max(1, count // 2)
+        for _ in range(count):
+            for _attempt in range(120):
+                tx = rng.randint(6, w - 7)
+                ty = rng.randint(6, h - 7)
+                if (tx, ty) in occupied:
+                    continue
+                if tiles[ty][tx] in WALL_TILES:
+                    continue
+                if abs(tx - cx) < 8 and abs(ty - cy) < 8:
+                    continue
+                occupied.add((tx, ty))
+                nodes.append(
+                    ResourceNode(
+                        kind,
+                        tx * TILE_SIZE,
+                        ty * TILE_SIZE,
+                        variant=rng.randrange(3),
+                        amount=rng.randint(1, 3),
+                    )
+                )
+                break
+    return nodes
+
+
 def _make_props(tiles, w, h, biome, location_type, rng, blocked=None):
     """Декоративные объекты локации: алтари, костры, сундуки, руины."""
     cx, cy = w // 2, h // 2
@@ -457,6 +507,18 @@ def generate_local_map(
     props = _make_props(
         tiles, w, h, biome, location_type, rng, blocked=object_tiles
     )
+    prop_tiles = {(tx, ty) for _kind, tx, ty in props}
+
+    resources = _make_resources(
+        tiles,
+        w,
+        h,
+        biome,
+        location_type,
+        rng,
+        blocked=object_tiles | prop_tiles,
+    )
+    objects.extend(resources)
 
     return LocalMap(
         w, h, biome, tiles, spawn_tile, props=props, objects=objects

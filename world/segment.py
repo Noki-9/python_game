@@ -12,6 +12,13 @@ class Segment:
         self.cleared = False
         self.location_type = location_type or LocationType.WILD
         self.poi = poi
+        # --- Гидрография и дороги ---
+        self.river = False
+        self.lake = False
+        self.crossing = False  # брод или мост
+        self.bridge = False
+        self.road = False
+        self.opened_props: set[tuple[str, int, int]] = set()
 
     def get_local_map(self, neighbors=None, player_state=None):
         if self.local_map is None:

@@ -67,9 +67,13 @@ class Player(Unit):
             return None
 
         damage = self.state.attack_damage
-        is_crit = random.random() < self.state.crit_chance
+        backstab = self.state.stealth and self.state.class_id in ("rogue", "archer")
+        is_crit = backstab or random.random() < self.state.crit_chance
         if is_crit:
             damage = int(damage * self.state.crit_multiplier)
+        if backstab:
+            damage = int(damage * 1.5)
+            self.state.stealth = False
 
         self.attack_timer = self.state.attack_cooldown
         self.face_towards(target.x + target.rect_x / 2, target.y + target.rect_y / 2)
@@ -104,8 +108,13 @@ class Player(Unit):
             dx /= length
             dy /= length
 
-        dx *= self.speed * dt
-        dy *= self.speed * dt
+        speed_mult = 1.0
+        if self.state is not None:
+            speed_mult = self.state.status.speed_multiplier()
+        else:
+            speed_mult = self.status.speed_multiplier()
+        dx *= self.speed * speed_mult * dt
+        dy *= self.speed * speed_mult * dt
 
         if dx != 0:
             self.x += dx

@@ -1,5 +1,6 @@
 from core.classes import CLASSES
 from core.skills import ALL_SKILLS
+from core.status_effects import StatusEffectSet
 from models.item import EQUIP_SLOTS, Item, ItemType
 from world.quest import QuestLog
 
@@ -38,6 +39,12 @@ class PlayerState:
 
         self.quest_log = QuestLog()
         self.waypoint = None
+
+        # --- Мир и перемещение ---
+        self.visited_villages: set[tuple[int, int]] = set()
+        self.last_village: tuple[int, int] | None = None
+        self.status = StatusEffectSet()
+        self.stealth = False
 
         # --- Мана и умения ---
         self.max_mana = self.class_def.max_mana
@@ -175,6 +182,33 @@ class PlayerState:
     def restore(self):
         self.stamina = self.max_stamina
 
+    @property
+    def travel_penalty(self):
+        """Тяжёлая броня/щит увеличивают стоимость шага по миру."""
+        penalty = 0
+        armor = self.equipment.get(ItemType.ARMOR)
+        shield = self.equipment.get(ItemType.SHIELD)
+        if armor is not None:
+            penalty += 1
+        if shield is not None:
+            penalty += 1
+        # Выносливость компенсирует вес.
+        if self.total_endurance >= 10:
+            penalty -= 1
+        return max(0, penalty)
+
+    def rest(self, full=False):
+        """Отдых восстанавливает силы, а при full — ещё HP и ману."""
+        self.stamina = self.max_stamina
+        if full:
+            self.hp = self.max_hp
+            self.mana = float(self.max_mana)
+        self.status.clear()
+
+    def remember_village(self, gx, gy):
+        self.visited_villages.add((int(gx), int(gy)))
+        self.last_village = (int(gx), int(gy))
+
     # ---------- HP / Мана ----------
     def heal(self, amount):
         self.hp = min(self.max_hp, self.hp + amount)
@@ -182,6 +216,13 @@ class PlayerState:
     def take_damage(self, amount):
         reduced = max(1, amount - self.defense)
         self.hp = max(0, self.hp - reduced)
+        return self.hp <= 0
+
+    def tick_status(self, dt):
+        """Тик статус-эффектов игрока. Возвращает True, если игрок погиб."""
+        damage = self.status.tick(dt)
+        if damage > 0:
+            self.hp = max(0, self.hp - damage)
         return self.hp <= 0
 
     def regen_mana(self, dt):
@@ -216,7 +257,7 @@ class PlayerState:
     def add_xp(self, amount):
         self.xp += max(0, amount)
         leveled = 0
-        while self.xp >= self.xp_to_next:
+        while self.level < 30 and self.xp >= self.xp_to_next:
             self.xp -= self.xp_to_next
             self.level += 1
             self.xp_to_next = int(self.xp_to_next * 1.5)

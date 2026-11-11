@@ -53,8 +53,16 @@ def _find_nearest_segment(world, biomes, from_gx, from_gy):
 def generate_quest(world, npc, seed, level=1, player_gx=0, player_gy=0):
     rng = random.Random(seed)
     choice = rng.choices(
-        [QuestType.KILL, QuestType.CLEAR, QuestType.FETCH, QuestType.BOSS],
-        weights=[40, 25, 25, 10],
+        [
+            QuestType.KILL,
+            QuestType.CLEAR,
+            QuestType.FETCH,
+            QuestType.BOSS,
+            QuestType.FREE,
+            QuestType.EXPLORE,
+            QuestType.ESCORT,
+        ],
+        weights=[34, 20, 20, 8, 8, 6, 4],
         k=1,
     )[0]
 
@@ -113,6 +121,87 @@ def generate_quest(world, npc, seed, level=1, player_gx=0, player_gy=0):
             target_gx=tgx,
             target_gy=tgy,
         )
+
+    if choice in (QuestType.FREE, QuestType.EXPLORE):
+        candidates = [
+            p
+            for p in world.pois
+            if p.poi_type.value == "quest_dungeon" and not p.cleared
+        ]
+        if not candidates:
+            choice = QuestType.KILL
+        else:
+            poi = rng.choice(candidates)
+            if choice == QuestType.FREE:
+                title = f"Освобождение: {poi.name}"
+                desc = (
+                    f"В {poi.name} удерживают пленника. "
+                    f"Проберись внутрь и освободи его."
+                )
+                qid = f"free_{poi.gx}_{poi.gy}"
+                gold, xp = 100, 180
+            else:
+                title = f"Руины: {poi.name}"
+                desc = (
+                    f"В {poi.name} спрятан древний артефакт. "
+                    f"Найди его в глубине локации."
+                )
+                qid = f"explore_{poi.gx}_{poi.gy}"
+                gold, xp = 90, 160
+            return Quest(
+                quest_id=qid,
+                title=title,
+                description=desc,
+                quest_type=choice,
+                objective=QuestObjective(
+                    description=desc,
+                    target_id=poi.name,
+                    required=1,
+                ),
+                reward_gold=gold,
+                reward_xp=xp,
+                giver_npc_id=npc.npc_id,
+                giver_name=npc.name,
+                target_gx=poi.gx,
+                target_gy=poi.gy,
+            )
+
+    if choice == QuestType.ESCORT:
+        candidates = [
+            p
+            for p in world.pois
+            if p.poi_type.value in ("village", "starting_village")
+            and (p.gx, p.gy) != (player_gx, player_gy)
+            and not p.cleared
+        ]
+        if not candidates:
+            choice = QuestType.KILL
+        else:
+            dest = min(
+                candidates,
+                key=lambda p: (p.gx - player_gx) ** 2
+                + (p.gy - player_gy) ** 2,
+            )
+            return Quest(
+                quest_id=f"escort_{dest.gx}_{dest.gy}",
+                title=f"Сопровождение: {dest.name}",
+                description=(
+                    f"Проводи путника до {dest.name}. "
+                    f"Дойди до поселения вместе с ним."
+                ),
+                quest_type=QuestType.ESCORT,
+                objective=QuestObjective(
+                    description=f"Довести путника до {dest.name}",
+                    target_id=dest.name,
+                    required=1,
+                ),
+                reward_gold=70,
+                reward_xp=140,
+                giver_npc_id=npc.npc_id,
+                giver_name=npc.name,
+                target_gx=dest.gx,
+                target_gy=dest.gy,
+            )
 
     if choice == QuestType.FETCH:
         item_id, item_name = rng.choice(FETCH_TARGETS)

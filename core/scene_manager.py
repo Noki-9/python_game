@@ -13,6 +13,9 @@ class SceneManager:
     def __init__(self):
         self.scene = None
         self.ui_overlays = []
+        self.running = True
+        self.world = None
+        self.player_state = None
 
     def switch(self, scene, **kwargs):
         if self.scene:

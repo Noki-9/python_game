@@ -37,6 +37,7 @@ DIALOGUES = {
             "Оружие и броня — моё ремесло. Что тебе нужно?",
             [
                 DialogueOption("Торговать", "trade"),
+                DialogueOption("Скрафтить снаряжение", "craft"),
                 DialogueOption("До свидания", "close"),
             ],
         ),
@@ -61,6 +62,9 @@ DIALOGUES = {
             [
                 DialogueOption("Расскажи о мире", "next", next_node="lore"),
                 DialogueOption("Что делать дальше?", "next", next_node="hint"),
+                DialogueOption(
+                    "Отдохнуть у очага (5 зол.)", "rest", cost=5
+                ),
                 DialogueOption("До свидания", "close"),
             ],
         ),

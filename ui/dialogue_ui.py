@@ -52,6 +52,19 @@ class DialogueUI(UIOverlay):
             self.manager.push_ui(
                 TradeUI(self.width, self.height, self.state, self.npc))
 
+        elif option.action == "craft":
+            from ui.craft_ui import CraftUI
+
+            self.manager.push_ui(CraftUI((self.width, self.height), self.state))
+
+        elif option.action == "rest":
+            if self.state.gold < option.cost:
+                self._flash("Недостаточно золота")
+                return
+            self.state.gold -= option.cost
+            self.state.rest(full=True)
+            self._flash("Вы отдохнули: силы, HP и мана восстановлены")
+
         elif option.action == "heal":
             if self.state.gold < option.cost:
                 self._flash("Недостаточно золота")

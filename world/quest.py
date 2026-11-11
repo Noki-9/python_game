@@ -7,6 +7,9 @@ class QuestType(Enum):
     CLEAR = "clear"
     FETCH = "fetch"
     BOSS = "boss"
+    FREE = "free"
+    EXPLORE = "explore"
+    ESCORT = "escort"
     STORY = "story"
 
 
@@ -79,6 +82,27 @@ class Quest:
             return self._try_complete()
         return False
 
+    def on_objective(self, target_id) -> bool:
+        """Освобождение пленника / поиск артефакта в локации."""
+        if self.status != QuestStatus.ACTIVE:
+            return False
+        if self.quest_type not in (QuestType.FREE, QuestType.EXPLORE):
+            return False
+        if target_id == self.objective.target_id:
+            self.objective.current = self.objective.required
+            return self._try_complete()
+        return False
+
+    def on_escort_arrived(self, gx, gy) -> bool:
+        if self.status != QuestStatus.ACTIVE:
+            return False
+        if self.quest_type != QuestType.ESCORT:
+            return False
+        if self.target_gx == gx and self.target_gy == gy:
+            self.objective.current = self.objective.required
+            return self._try_complete()
+        return False
+
     def _try_complete(self) -> bool:
         if self.objective.done and self.status == QuestStatus.ACTIVE:
             self.status = QuestStatus.COMPLETED
@@ -138,3 +162,9 @@ class QuestLog:
 
     def notify_location_cleared(self, name) -> list:
         return [q for q in self.quests if q.on_location_cleared(name)]
+
+    def notify_objective(self, target_id) -> list:
+        return [q for q in self.quests if q.on_objective(target_id)]
+
+    def notify_escort_arrived(self, gx, gy) -> list:
+        return [q for q in self.quests if q.on_escort_arrived(gx, gy)]

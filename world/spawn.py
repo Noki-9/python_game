@@ -27,6 +27,7 @@ ENEMY_DEFS = {
         aggro_radius=220,
         xp=25,
         color=(180, 140, 90),
+        hit_effect="bleed",
     ),
     "skeleton": dict(
         hp=25,
@@ -48,6 +49,7 @@ ENEMY_DEFS = {
         xp=100,
         color=(90, 130, 70),
         scale=1.3,
+        hit_effect="bleed",
     ),
 }
 
@@ -69,6 +71,7 @@ ANIMAL_DEFS = {
         xp=20,
         color=(130, 130, 140),
         passive=False,
+        hit_effect="bleed",
     ),
     "boar": dict(
         hp=25,
@@ -87,6 +90,7 @@ ANIMAL_DEFS = {
         xp=50,
         color=(90, 70, 50),
         passive=False,
+        hit_effect="bleed",
     ),
     "rabbit": dict(
         hp=5,
@@ -123,6 +127,7 @@ ANIMAL_DEFS = {
         xp=8,
         color=(120, 180, 90),
         passive=False,
+        hit_effect="poison",
     ),
     "scorpion": dict(
         hp=12,
@@ -132,6 +137,7 @@ ANIMAL_DEFS = {
         xp=10,
         color=(160, 100, 50),
         passive=False,
+        hit_effect="poison",
     ),
     "lizard": dict(
         hp=6,
@@ -150,6 +156,7 @@ ANIMAL_DEFS = {
         xp=22,
         color=(220, 230, 240),
         passive=False,
+        hit_effect="bleed",
     ),
     "moose": dict(
         hp=60,
@@ -159,6 +166,7 @@ ANIMAL_DEFS = {
         xp=30,
         color=(100, 70, 50),
         passive=False,
+        hit_effect="bleed",
     ),
     "goat": dict(
         hp=15,
@@ -236,7 +244,7 @@ def spawn_enemies(local_map, biome, location_type, seed, level=1):
     if location_type.is_quest:
         count = rng.randint(6, 10)
     else:
-        count = rng.randint(3, 6)
+        count = rng.randint(3, 8)
 
     pool = BIOME_ENEMIES.get(biome, ["goblin"])
     spawn_tx, spawn_ty = local_map.spawn_tile
@@ -275,6 +283,7 @@ def spawn_enemies(local_map, biome, location_type, seed, level=1):
             loot_rng_seed=rng.randint(0, 1_000_000),
             visual_scale=scale,
         )
+        e.hit_effect = defn.get("hit_effect")
         enemies.append(e)
 
     return enemies
@@ -320,6 +329,7 @@ def spawn_animals(local_map, biome, location_type, seed):
             loot_rng_seed=rng.randint(0, 1_000_000),
             visual_scale=VISUAL_SCALES.get(animal_id, 1.0),
         )
+        a.hit_effect = defn.get("hit_effect")
         animals.append(a)
 
     return animals

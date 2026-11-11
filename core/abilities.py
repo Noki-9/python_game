@@ -17,6 +17,11 @@ class AbilityDef:
     projectile_spread: float = 0.0  # градусы
     heal: int = 0
     color: tuple = (255, 200, 100)
+    # Статус-эффект, накладываемый на цель.
+    effect: str = ""
+    effect_chance: float = 1.0
+    effect_duration: float = 0.0
+    effect_power: float = 0.0
 
     @property
     def is_projectile(self):
@@ -46,6 +51,10 @@ WARRIOR_ABILITIES = [
         damage_mult=1.8,
         aoe_radius=70,
         color=(220, 120, 60),
+        effect="bleed",
+        effect_chance=0.5,
+        effect_duration=4.0,
+        effect_power=2.5,
     ),
     AbilityDef(
         ability_id="w_f",
@@ -69,6 +78,10 @@ WARRIOR_ABILITIES = [
         damage_mult=2.5,
         aoe_radius=100,
         color=(255, 80, 80),
+        effect="bleed",
+        effect_chance=0.8,
+        effect_duration=4.0,
+        effect_power=4.0,
     ),
 ]
 
@@ -83,6 +96,10 @@ ROGUE_ABILITIES = [
         damage_mult=3.5,
         range=80,
         color=(180, 80, 220),
+        effect="bleed",
+        effect_chance=0.7,
+        effect_duration=5.0,
+        effect_power=3.0,
     ),
     AbilityDef(
         ability_id="r_f",
@@ -121,6 +138,10 @@ MAGE_ABILITIES = [
         projectile_speed=500,
         aoe_radius=40,
         color=(255, 120, 60),
+        effect="burn",
+        effect_chance=0.7,
+        effect_duration=4.0,
+        effect_power=3.0,
     ),
     AbilityDef(
         ability_id="m_f",
@@ -132,6 +153,10 @@ MAGE_ABILITIES = [
         damage_mult=1.5,
         aoe_radius=120,
         color=(120, 200, 255),
+        effect="freeze",
+        effect_chance=0.8,
+        effect_duration=2.5,
+        effect_power=1.0,
     ),
     AbilityDef(
         ability_id="m_r",
@@ -144,6 +169,10 @@ MAGE_ABILITIES = [
         range=400,
         aoe_radius=120,
         color=(255, 200, 100),
+        effect="burn",
+        effect_chance=1.0,
+        effect_duration=5.0,
+        effect_power=4.0,
     ),
 ]
 
@@ -173,6 +202,10 @@ ARCHER_ABILITIES = [
         range=400,
         projectile_speed=900,
         color=(160, 240, 100),
+        effect="bleed",
+        effect_chance=0.8,
+        effect_duration=4.0,
+        effect_power=3.0,
     ),
     AbilityDef(
         ability_id="a_r",

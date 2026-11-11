@@ -61,9 +61,10 @@ class Animal(Enemy):
 
         if self.passive:
             # Пассивные: убегают только когда их ударили
+            speed = self.speed * self.status.speed_multiplier()
             if self.alert_timer > 0 and dist > 0:
-                mvx = -dx / dist * self.speed * dt
-                mvy = -dy / dist * self.speed * dt
+                mvx = -dx / dist * speed * dt
+                mvy = -dy / dist * speed * dt
                 self.moving = True
                 self.face_delta(mvx, mvy)
                 self._try_move(mvx, mvy, walls)
