@@ -264,6 +264,40 @@
       ]
     }
   },
+  "objects": {
+    "sheet": "objects.png",
+    "frame": [
+      32,
+      32
+    ],
+    "cols": 4,
+    "index": {
+      "tree": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ]
+      ],
+      "cactus": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          1
+        ]
+      ]
+    }
+  },
   "characters": {
     "players": {
       "sheet": "characters/players.png",

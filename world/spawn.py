@@ -215,6 +215,8 @@ def _random_free_pos(rng, local_map, avoid_pos=None, min_dist=0):
         ty = rng.randint(5, local_map.height - 6)
         if not local_map.is_walkable(tx, ty):
             continue
+        if local_map.has_object(tx, ty):
+            continue
         px = tx * TILE_SIZE
         py = ty * TILE_SIZE
         if avoid_pos is not None and min_dist > 0:

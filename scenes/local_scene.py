@@ -166,6 +166,11 @@ class LocalScene(Scene):
                     (tx, ty),
                     assets.tile_color(row[tx], COLORS.get(row[tx], (255, 0, 255))),
                 )
+        for obj in self.map.objects:
+            base.set_at(
+                (obj.tx, obj.ty),
+                assets.object_color(obj.kind, COLORS.get(obj.kind, (255, 0, 255))),
+            )
         self._minimap_cache = pg.transform.scale(base, (MINIMAP_SIZE, MINIMAP_SIZE))
 
     # ================= Ввод =================
@@ -716,6 +721,18 @@ class LocalScene(Scene):
 
     def _draw_entities(self, screen):
         drawables = []
+
+        # Статичные объекты (деревья, кактусы) сортируются вместе с юнитами по Y.
+        tx0, ty0, tx1, ty1 = self.camera.visible_tile_range(TILE_SIZE)
+        tx1 = min(tx1, self.map.width)
+        ty1 = min(ty1, self.map.height)
+        for ty in range(ty0, ty1):
+            row = self.map.object_grid[ty]
+            for tx in range(tx0, tx1):
+                obj = row[tx]
+                if obj is not None:
+                    drawables.append((obj.bottom, "object", obj))
+
         for a in self.animals:
             if a.is_alive():
                 drawables.append((a.y + a.rect_y, "unit", a))
@@ -729,6 +746,8 @@ class LocalScene(Scene):
         for _y, kind, obj in drawables:
             if kind == "npc":
                 obj.draw(screen, self.camera, self._font_npc)
+            elif kind == "object":
+                obj.draw(screen, self.camera, self.time)
             else:
                 obj.draw(screen, self.camera)
 

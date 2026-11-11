@@ -2,10 +2,23 @@ import random
 
 from core.config import CHUNK_SIZE, LOCAL_H, LOCAL_W, TILE_SIZE
 from core.noise import ValueNoise
+from models.world_object import WorldObject
 from world.biome import Biome
 from world.location_type import LocationType
 
-WALL_TILES = {"water", "rock", "tree", "cactus", "house_wall"}
+WALL_TILES = {"water", "rock", "house_wall"}
+
+VEGETATION_TILES = {"tree", "cactus"}
+SOLID_OBJECTS = {"cactus"}
+
+GROUND_BY_BIOME = {
+    Biome.PLAINS: "grass",
+    Biome.FOREST: "grass",
+    Biome.DESERT: "sand",
+    Biome.TUNDRA: "snow",
+    Biome.MOUNTAIN: "rock",
+    Biome.OCEAN: "sand",
+}
 
 TRANSITION_WIDTH = 12
 WATER_DEPTH = 3
@@ -13,15 +26,29 @@ NOISE_AMPLITUDE = 6
 
 
 class LocalMap:
-    def __init__(self, width, height, biome, tiles, spawn_tile, props=None):
+    def __init__(
+        self, width, height, biome, tiles, spawn_tile, props=None, objects=None
+    ):
         self.width = width
         self.height = height
         self.biome = biome
         self.tiles = tiles
         self.spawn_tile = spawn_tile
         self.props = props or []
+        self.objects = objects or []
+        self.object_grid = [[None] * width for _ in range(height)]
+        for obj in self.objects:
+            self.object_grid[obj.ty][obj.tx] = obj
+        self._solid_object_tiles = {
+            (obj.tx, obj.ty) for obj in self.objects if obj.solid
+        }
         self.walls_by_chunk = {}
         self._build_walls_index()
+
+    def _add_wall(self, tx, ty, pg):
+        chunk = (tx // CHUNK_SIZE, ty // CHUNK_SIZE)
+        rect = pg.Rect(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+        self.walls_by_chunk.setdefault(chunk, []).append(rect)
 
     def _build_walls_index(self):
         import pygame as pg
@@ -30,14 +57,21 @@ class LocalMap:
             row = self.tiles[ty]
             for tx in range(self.width):
                 if row[tx] in WALL_TILES:
-                    chunk = (tx // CHUNK_SIZE, ty // CHUNK_SIZE)
-                    rect = pg.Rect(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-                    self.walls_by_chunk.setdefault(chunk, []).append(rect)
+                    self._add_wall(tx, ty, pg)
+        for tx, ty in self._solid_object_tiles:
+            self._add_wall(tx, ty, pg)
 
     def is_walkable(self, tx, ty):
         if not (0 <= tx < self.width and 0 <= ty < self.height):
             return False
+        if (tx, ty) in self._solid_object_tiles:
+            return False
         return self.tiles[ty][tx] not in WALL_TILES
+
+    def has_object(self, tx, ty):
+        if not (0 <= tx < self.width and 0 <= ty < self.height):
+            return False
+        return self.object_grid[ty][tx] is not None
 
     def walls_near(self, px, py, radius_px=128):
         cx0 = int((px - radius_px) // (CHUNK_SIZE * TILE_SIZE))
@@ -173,6 +207,8 @@ def _apply_transition(tiles, w, h, direction, neighbor_biome, rng, noise):
         )
 
 
+# Деревья/кактусы здесь задают плотность растительности: после генерации
+# _extract_vegetation выносит их из тайлов в отдельные объекты.
 FILLERS = {
     Biome.PLAINS: [("grass", 0.90), ("tree", 0.08), ("rock", 0.02)],
     Biome.FOREST: [("grass", 0.55), ("tree", 0.40), ("rock", 0.05)],
@@ -270,7 +306,8 @@ def _apply_quest_site(tiles, w, h, rng):
                 tiles[y][x] = "stone"
 
 
-def _find_spawn_near(tiles, cx, cy, w, h, ground, max_r=60):
+def _find_spawn_near(tiles, cx, cy, w, h, ground, blocked=None, max_r=60):
+    blocked = blocked or set()
     for r in range(max_r):
         for dy in range(-r, r + 1):
             for dx in range(-r, r + 1):
@@ -278,7 +315,7 @@ def _find_spawn_near(tiles, cx, cy, w, h, ground, max_r=60):
                     continue
                 x, y = cx + dx, cy + dy
                 if 0 <= x < w and 0 <= y < h:
-                    if tiles[y][x] not in WALL_TILES:
+                    if tiles[y][x] not in WALL_TILES and (x, y) not in blocked:
                         return (x, y)
     # Крайний случай — расчищаем центр
     for dy in range(-1, 2):
@@ -289,16 +326,31 @@ def _find_spawn_near(tiles, cx, cy, w, h, ground, max_r=60):
     return (cx, cy)
 
 
-def _make_props(tiles, w, h, biome, location_type, rng):
+def _extract_vegetation(tiles, w, h, ground):
+    """Выносит деревья и кактусы из тайлов в отдельные объекты."""
+    objects = []
+    for ty in range(h):
+        row = tiles[ty]
+        for tx in range(w):
+            kind = row[tx]
+            if kind not in VEGETATION_TILES:
+                continue
+            objects.append((kind, tx, ty))
+            row[tx] = "sand" if kind == "cactus" else ground
+    return objects
+
+
+def _make_props(tiles, w, h, biome, location_type, rng, blocked=None):
     """Декоративные объекты локации: алтари, костры, сундуки, руины."""
     cx, cy = w // 2, h // 2
     props = []
     occupied = set()
+    blocked = set(blocked or ())
 
     def free(tx, ty, margin=2):
         if not (margin <= tx < w - margin and margin <= ty < h - margin):
             return False
-        if tiles[ty][tx] in WALL_TILES:
+        if tiles[ty][tx] in WALL_TILES or (tx, ty) in blocked:
             return False
         for ox, oy in occupied:
             if abs(ox - tx) < 3 and abs(oy - ty) < 3:
@@ -365,12 +417,13 @@ def generate_local_map(
             _apply_transition(tiles, w, h, direction, nbr_biome, rng, noise)
 
     cx, cy = w // 2, h // 2
-    ground = "sand" if biome == Biome.OCEAN else "grass"
+    fallback_ground = "sand" if biome == Biome.OCEAN else "grass"
 
     # Тип локации
+    spawn_tile = None
     if location_type.is_settlement:
         _apply_village(tiles, w, h, rng)
-        spawn_tx, spawn_ty = cx, cy
+        spawn_tile = (cx, cy)
     elif location_type.is_quest:
         _apply_quest_site(tiles, w, h, rng)
         spawn_tx, spawn_ty = cx, cy + 15
@@ -379,9 +432,32 @@ def generate_local_map(
                 x, y = spawn_tx + dx, spawn_ty + dy
                 if 0 <= x < w and 0 <= y < h:
                     tiles[y][x] = "stone"
-    else:
-        spawn_tx, spawn_ty = _find_spawn_near(tiles, cx, cy, w, h, ground)
+        spawn_tile = (spawn_tx, spawn_ty)
 
-    props = _make_props(tiles, w, h, biome, location_type, rng)
+    # Деревья и кактусы становятся отдельными объектами, земля под ними — обычный тайл.
+    objects = [
+        WorldObject(
+            kind,
+            tx * TILE_SIZE,
+            ty * TILE_SIZE,
+            variant=(tx * 73856093 ^ ty * 19349663) & 0x7FFFFFFF,
+            solid=kind in SOLID_OBJECTS,
+        )
+        for kind, tx, ty in _extract_vegetation(
+            tiles, w, h, GROUND_BY_BIOME.get(biome, "grass")
+        )
+    ]
+    object_tiles = {(obj.tx, obj.ty) for obj in objects}
 
-    return LocalMap(w, h, biome, tiles, (spawn_tx, spawn_ty), props=props)
+    if spawn_tile is None:
+        spawn_tile = _find_spawn_near(
+            tiles, cx, cy, w, h, fallback_ground, blocked=object_tiles
+        )
+
+    props = _make_props(
+        tiles, w, h, biome, location_type, rng, blocked=object_tiles
+    )
+
+    return LocalMap(
+        w, h, biome, tiles, spawn_tile, props=props, objects=objects
+    )

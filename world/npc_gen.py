@@ -62,6 +62,8 @@ def _find_npc_pos(rng, local_map, cx_px, cy_px, existing):
             continue
         if not local_map.is_walkable(tx, ty):
             continue
+        if local_map.has_object(tx, ty):
+            continue
         ok = True
         for other in existing:
             if math.hypot(px - other.x, py - other.y) < 56:

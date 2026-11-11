@@ -81,6 +81,7 @@ class AssetManager:
         self._tint_cache: dict[tuple, list[pg.Surface]] = {}
         self._scale_cache: dict[tuple, pg.Surface] = {}
         self._tile_colors: dict[str, tuple] = {}
+        self._object_colors: dict[str, tuple] = {}
         self._load_manifest()
 
     # ------------------------------------------------------------------
@@ -103,6 +104,7 @@ class AssetManager:
         self._tint_cache.clear()
         self._scale_cache.clear()
         self._tile_colors.clear()
+        self._object_colors.clear()
         self._load_manifest()
 
     def image(self, relpath: str):
@@ -275,6 +277,57 @@ class AssetManager:
         if len(frames) == 1:
             return frames[0]
         return frames[int(time * 6) % len(frames)]
+
+    def object_frames(self, name):
+        cache_key = ("object", name)
+        cached = self._tile_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        meta = self.manifest.get("objects")
+        if not meta:
+            return []
+        slots = meta.get("index", {}).get(name, [])
+        sheet = self.image(meta["sheet"])
+        if sheet is None:
+            return []
+        fw, fh = meta.get("frame", [32, 32])
+        frames = []
+        for c, r in slots:
+            frame = self._sub(sheet, c * fw, r * fh, fw, fh)
+            if frame is not None:
+                frames.append(frame)
+        self._tile_cache[cache_key] = frames
+        return frames
+
+    def object_frame(self, name, variant=0):
+        frames = self.object_frames(name)
+        if not frames:
+            return None
+        return frames[variant % len(frames)]
+
+    def object_color(self, name, fallback=(80, 80, 80)):
+        if name in self._object_colors:
+            return self._object_colors[name]
+        frames = self.object_frames(name)
+        if not frames:
+            return fallback
+        frame = frames[0]
+        w, h = frame.get_size()
+        r = g = b = n = 0
+        for y in range(0, h, 3):
+            for x in range(0, w, 3):
+                c = frame.get_at((x, y))
+                if c.a == 0:
+                    continue
+                r += c.r
+                g += c.g
+                b += c.b
+                n += 1
+        if not n:
+            return fallback
+        color = (r // n, g // n, b // n)
+        self._object_colors[name] = color
+        return color
 
     # ------------------------------------------------------------------
     # Снаряды и эффекты
