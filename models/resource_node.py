@@ -8,12 +8,14 @@ RESOURCE_ITEMS = {
     "ore": "iron_ore",
     "herb": "herb",
     "log": "wood",
+    "stone": "stone",
 }
 
 RESOURCE_NAMES = {
     "ore": "Руда",
     "herb": "Трава",
     "log": "Дерево",
+    "stone": "Камень",
 }
 
 

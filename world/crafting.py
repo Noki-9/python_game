@@ -24,6 +24,7 @@ RECIPES = [
     Recipe("r_boots", "Кожаные сапоги", "boots_leather", {"leather": 2}, 5),
     Recipe("r_axe", "Железный топор", "axe_iron", {"iron_ore": 3, "wood": 2}, 15),
     Recipe("r_shield_wood", "Деревянный щит", "shield_wood", {"wood": 3}, 8),
+    Recipe("r_axe_stone", "Каменный топор", "axe_iron", {"stone": 4, "wood": 2}, 4),
 ]
 
 # У костра можно сделать только простое снаряжение из дерева/кожи.

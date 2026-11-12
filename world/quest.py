@@ -50,6 +50,8 @@ class Quest:
     consume_items: bool = False
     target_gx: int | None = None
     target_gy: int | None = None
+    giver_gx: int | None = None
+    giver_gy: int | None = None
 
     def on_kill(self, enemy_id) -> bool:
         if self.status != QuestStatus.ACTIVE:
@@ -106,6 +108,13 @@ class Quest:
     def _try_complete(self) -> bool:
         if self.objective.done and self.status == QuestStatus.ACTIVE:
             self.status = QuestStatus.COMPLETED
+            return True
+        return False
+
+    def fail(self) -> bool:
+        """Провалить активный квест (например, при уничтожении деревни)."""
+        if self.status == QuestStatus.ACTIVE:
+            self.status = QuestStatus.FAILED
             return True
         return False
 
@@ -168,3 +177,11 @@ class QuestLog:
 
     def notify_escort_arrived(self, gx, gy) -> list:
         return [q for q in self.quests if q.on_escort_arrived(gx, gy)]
+
+    def fail_from_village(self, gx, gy) -> list:
+        """Отменить задания, выданные в указанной деревне."""
+        failed = []
+        for quest in self.quests:
+            if quest.giver_gx == gx and quest.giver_gy == gy and quest.fail():
+                failed.append(quest)
+        return failed

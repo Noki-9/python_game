@@ -1,7 +1,10 @@
+import random
+
 from core.classes import CLASSES
 from core.skills import ALL_SKILLS
 from core.status_effects import StatusEffectSet
 from models.item import EQUIP_SLOTS, Item, ItemType
+from world.factions import FACTIONS
 from world.quest import QuestLog
 
 
@@ -28,6 +31,8 @@ class PlayerState:
         self.gold = 0
 
         self.reputation = 0
+        # Отношение фракций: Корона / Вольные / Культ.
+        self.factions = {faction_id: 0 for faction_id in FACTIONS}
 
         self.inventory: list[Item] = []
         self.equipment: dict[ItemType, Item | None] = {
@@ -45,6 +50,7 @@ class PlayerState:
         self.last_village: tuple[int, int] | None = None
         self.status = StatusEffectSet()
         self.stealth = False
+        self.last_blocked = False
 
         # --- Мана и умения ---
         self.max_mana = self.class_def.max_mana
@@ -209,12 +215,33 @@ class PlayerState:
         self.visited_villages.add((int(gx), int(gy)))
         self.last_village = (int(gx), int(gy))
 
+    # ---------- Фракции ----------
+    def faction_standing(self, faction_id) -> int:
+        return int(self.factions.get(faction_id, 0))
+
+    def adjust_faction(self, faction_id, delta):
+        if faction_id not in self.factions:
+            return
+        self.factions[faction_id] = max(
+            -100, min(100, self.factions[faction_id] + int(delta))
+        )
+
+    def reputation_with(self, faction_id) -> int:
+        """Общая репутация плюс отношение конкретной фракции."""
+        return self.reputation + self.faction_standing(faction_id)
+
     # ---------- HP / Мана ----------
     def heal(self, amount):
         self.hp = min(self.max_hp, self.hp + amount)
 
     def take_damage(self, amount):
         reduced = max(1, amount - self.defense)
+        self.last_blocked = False
+        if self.class_id == "warrior":
+            shield = self.equipment.get(ItemType.SHIELD)
+            if shield is not None and random.random() < 0.25:
+                reduced = max(1, reduced // 4)
+                self.last_blocked = True
         self.hp = max(0, self.hp - reduced)
         return self.hp <= 0
 

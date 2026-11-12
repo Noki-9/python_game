@@ -19,13 +19,14 @@ from ui.dialogue_ui import DialogueUI
 from ui.inventory_ui import InventoryUI
 from ui.quest_log_ui import QuestLogUI
 from ui.skills_ui import SkillsUI
+from world.factions import FACTIONS, faction_for_seed, faction_name
 from world.item_generator import roll_random_equipment
 from world.location_type import LocationType
 from world.loot import GOLD, ITEMS_REGISTRY
 from world.npc_gen import spawn_npcs
 from world.quest import QuestType
 from world.quest_gen import generate_quest
-from world.spawn import spawn_animals, spawn_enemies
+from world.spawn import spawn_animals, spawn_enemies, spawn_guard_enemy
 
 COLORS = {
     "grass": (100, 180, 90),
@@ -67,6 +68,12 @@ class LocalScene(Scene):
         self.objective_kind = None
         self.objective_quest = None
         self.escort_npc = None
+        self.village_faction = None
+        self.casting = None
+        self.cast_elapsed = 0.0
+        self.cast_total = 0.0
+        self._last_hp = None
+        self.steal_cooldown = 0.0
         self._minimap_cache = None
         self.time = 0.0
 
@@ -101,6 +108,11 @@ class LocalScene(Scene):
         self.visual_effects = []
         self.particles = []
         self.opened_props = set(self.segment.opened_props)
+        self.casting = None
+        self.cast_elapsed = 0.0
+        self.cast_total = 0.0
+        self._last_hp = None
+        self.steal_cooldown = 0.0
         self._minimap_cache = None
         self.time = 0.0
 
@@ -114,6 +126,12 @@ class LocalScene(Scene):
             neighbors=neighbors,
             player_state=state,
         )
+        for obj in self.map.objects:
+            if isinstance(obj, ResourceNode) and (
+                obj.tx,
+                obj.ty,
+            ) in self.segment.depleted_resources:
+                obj.depleted = True
 
         tx, ty = self.map.spawn_tile
         px = tx * TILE_SIZE
@@ -153,9 +171,22 @@ class LocalScene(Scene):
         )
 
         if self.segment.location_type.is_settlement:
+            self.village_faction = faction_for_seed(self.segment.seed)
             is_start = self.segment.location_type.value == "starting_village"
-            self.npcs = spawn_npcs(self.map, self.segment.seed, is_starting=is_start)
+            if self.segment.village_state == "destroyed":
+                self.npcs = []
+                self.notifications.append(("Деревня разрушена и опустела", 3.0))
+            else:
+                self.npcs = spawn_npcs(
+                    self.map, self.segment.seed, is_starting=is_start
+                )
+                if self.segment.village_state == "hostile":
+                    self._make_guards_hostile(notify=False)
+                    self.notifications.append(
+                        ("Жители враждебны: стража атакует", 3.0)
+                    )
         else:
+            self.village_faction = None
             self.npcs = []
 
         self._setup_location_objectives(state)
@@ -164,6 +195,7 @@ class LocalScene(Scene):
 
         if self.segment.cleared:
             self.notifications.append(("Локация уже зачищена", 3.0))
+        self._last_hp = state.hp
 
     # ================= Цели квестов в локации =================
     def _find_free_prop_tile(self):
@@ -322,6 +354,7 @@ class LocalScene(Scene):
                 )
 
     def on_exit(self):
+        self.casting = None
         self.segment.reset_if_unfinished()
 
     # ================= Мини-карта: построение =================
@@ -387,6 +420,9 @@ class LocalScene(Scene):
             if event.key == pg.K_x:
                 self._toggle_stealth()
                 return
+            if event.key == pg.K_g:
+                self._try_steal()
+                return
             if event.key == pg.K_q:
                 self._cast_ability("Q")
                 return
@@ -399,6 +435,14 @@ class LocalScene(Scene):
             if event.key == pg.K_e:
                 npc = self._find_npc_near()
                 if npc is not None:
+                    if (
+                        self.segment.location_type.is_settlement
+                        and self.segment.village_state == "hostile"
+                    ):
+                        self.notifications.append(
+                            ("Жители враждебны и не желают говорить", 2.0)
+                        )
+                        return
                     self.manager.push_ui(
                         DialogueUI(
                             screen.get_size(),
@@ -479,8 +523,34 @@ class LocalScene(Scene):
         else:
             self.notifications.append(("Скрытность выключена", 1.2))
 
+    def _try_steal(self):
+        state = self.manager.player_state
+        if state.class_id != "rogue":
+            self.notifications.append(("Кража доступна только разбойнику", 1.6))
+            return
+        if self.steal_cooldown > 0:
+            return
+        npc = self._find_npc_near()
+        if npc is None:
+            self.notifications.append(("Рядом нет подходящей цели", 1.4))
+            return
+        self.steal_cooldown = 3.0
+        rng = random.Random()
+        chance = min(0.9, 0.35 + state.total_agility * 0.02)
+        if rng.random() < chance:
+            gold = rng.randint(3, 10) + state.level
+            state.add_gold(gold)
+            self.notifications.append((f"Кража удалась: +{gold} золота", 2.0))
+        else:
+            state.reputation -= 3
+            state.adjust_faction(getattr(npc, "faction", "free"), -5)
+            self.notifications.append(("Кража не удалась: репутация -3", 2.0))
+
     def _cast_ability(self, key):
         s = self.manager.player_state
+        if self.casting is not None:
+            self.notifications.append(("Заклинание уже читается", 1.0))
+            return
         ability = get_ability_for_key(s.class_id, key)
         if ability is None:
             return
@@ -494,6 +564,14 @@ class LocalScene(Scene):
 
         s.stealth = False
         self.player.trigger_attack(0.3)
+        if ability.cast_time > 0:
+            self.casting = ability
+            self.cast_elapsed = 0.0
+            self.cast_total = ability.cast_time
+            return
+        self._resolve_ability(ability)
+
+    def _resolve_ability(self, ability):
         if ability.is_projectile:
             self._cast_projectile(ability)
         elif ability.is_aoe_at_cursor:
@@ -502,6 +580,19 @@ class LocalScene(Scene):
             self._cast_aoe_self(ability)
         elif ability.is_single_target:
             self._cast_single_target(ability)
+
+    def _interrupt_cast(self):
+        ability = self.casting
+        if ability is None:
+            return
+        state = self.manager.player_state
+        # Прерывание: возвращаем ману и сбрасываем кулдаун, чтобы можно было повторить.
+        state.mana = min(state.max_mana, state.mana + ability.mana_cost)
+        state.ability_cooldowns[ability.ability_id] = 0.0
+        self.casting = None
+        self.cast_elapsed = 0.0
+        self.cast_total = 0.0
+        self.notifications.append(("Заклинание прервано ударом!", 2.0))
 
     @staticmethod
     def _apply_ability_effect(ability, target):
@@ -676,6 +767,10 @@ class LocalScene(Scene):
         self.player.trigger_attack(0.25)
         targets = [e for e in self.enemies if e.is_alive()] + [
             a for a in self.animals if a.is_alive()
+        ] + [
+            n
+            for n in self.npcs
+            if n.is_alive() and n is not self.escort_npc
         ]
         result = self.player.try_attack(targets)
         if result is None:
@@ -697,7 +792,97 @@ class LocalScene(Scene):
             self._add_fx("hit", tx, ty, (255, 240, 210), 22, 0.22)
             self._spawn_particles(tx, ty, target.texture, count=7, speed=95)
         if killed:
-            self._on_enemy_killed(target)
+            if target in self.npcs:
+                self._on_npc_killed(target)
+            else:
+                self._on_enemy_killed(target)
+
+    def _on_npc_killed(self, npc):
+        """Убийство жителя: деревня становится враждебной (ТЗ 8)."""
+        state = self.manager.player_state
+        cx = npc.x + npc.rect_x / 2
+        cy = npc.y + npc.rect_y / 2
+        self._spawn_particles(cx, cy, npc.texture, count=14, speed=120)
+        self._add_fx("hit", cx, cy, npc.texture, 26, 0.3)
+        if npc in self.npcs:
+            self.npcs.remove(npc)
+
+        if not self.segment.location_type.is_settlement:
+            return
+        if self.segment.village_state == "destroyed":
+            return
+
+        first_murder = self.segment.village_state != "hostile"
+        self.segment.village_state = "hostile"
+        if self.village_faction is None:
+            self.village_faction = faction_for_seed(self.segment.seed)
+
+        if first_murder:
+            state.reputation -= 10
+            for faction_id in FACTIONS:
+                delta = -20 if faction_id == self.village_faction else -5
+                state.adjust_faction(faction_id, delta)
+            failed = state.quest_log.fail_from_village(
+                self.segment.gx, self.segment.gy
+            )
+            if failed:
+                self.notifications.append(
+                    (f"Провалено заданий: {len(failed)}", 3.0)
+                )
+            self.notifications.append(
+                ("Убийство жителя! Деревня враждебна", 3.0)
+            )
+            self._make_guards_hostile()
+        else:
+            state.reputation -= 2
+            state.adjust_faction(self.village_faction, -4)
+
+        from core.save_load import save_game
+
+        save_game(self.manager.world, state, slot="auto")
+        self._check_village_destroyed()
+
+    def _make_guards_hostile(self, notify=True):
+        """Превратить живых стражников-НПС во враждебных врагов."""
+        if not self.segment.location_type.is_settlement:
+            return
+        converted = 0
+        for npc in list(self.npcs):
+            if npc.role != "guard" or not npc.is_alive():
+                continue
+            self.npcs.remove(npc)
+            enemy = spawn_guard_enemy(
+                npc.x,
+                npc.y,
+                seed=self.segment.seed + converted * 97,
+            )
+            self.enemies.append(enemy)
+            converted += 1
+        if notify and converted:
+            self.notifications.append(("Стражники берутся за оружие!", 2.5))
+
+    def _check_village_destroyed(self):
+        if not self.segment.location_type.is_settlement:
+            return
+        if self.segment.village_state != "hostile":
+            return
+        if any(npc.is_alive() for npc in self.npcs):
+            return
+        if any(enemy.is_alive() for enemy in self.enemies):
+            return
+        self.segment.village_state = "destroyed"
+        if self.segment.poi is not None:
+            self.segment.poi.destroyed = True
+        state = self.manager.player_state
+        state.reputation -= 5
+        if self.village_faction is not None:
+            state.adjust_faction(self.village_faction, -15)
+        self.notifications.append(
+            ("Деревня уничтожена: место отмечено на карте", 4.0)
+        )
+        from core.save_load import save_game
+
+        save_game(self.manager.world, state, slot="auto")
 
     def _on_enemy_killed(self, enemy):
         state = self.manager.player_state
@@ -725,6 +910,7 @@ class LocalScene(Scene):
         finished = state.quest_log.notify_kill(enemy.enemy_id)
         self._on_quests_completed(finished)
         self._check_quest_completion()
+        self._check_village_destroyed()
 
     def _on_quests_completed(self, finished):
         state = self.manager.player_state
@@ -803,6 +989,8 @@ class LocalScene(Scene):
         best = None
         best_d = NPC_INTERACT_RADIUS
         for npc in self.npcs:
+            if not npc.is_alive():
+                continue
             d = math.hypot(npc.x + npc.rect_x / 2 - px, npc.y + npc.rect_y / 2 - py)
             if d < best_d:
                 best = npc
@@ -857,6 +1045,7 @@ class LocalScene(Scene):
         item.count = node.amount
         state.add_item(item)
         node.depleted = True
+        self.segment.depleted_resources.add((node.tx, node.ty))
         state.add_xp(3)
         self.notifications.append((f"+{item.count} {item.name}", 1.8))
         cx = node.x + node.rect_x / 2
@@ -982,6 +1171,21 @@ class LocalScene(Scene):
             self._on_player_death()
             return
 
+        if self.steal_cooldown > 0:
+            self.steal_cooldown = max(0.0, self.steal_cooldown - dt)
+
+        if self.casting is not None:
+            if self._last_hp is not None and state.hp < self._last_hp - 0.01:
+                self._interrupt_cast()
+            else:
+                self.cast_elapsed += dt
+                if self.cast_elapsed >= self.cast_total:
+                    ability = self.casting
+                    self.casting = None
+                    self.cast_elapsed = 0.0
+                    self.cast_total = 0.0
+                    self._resolve_ability(ability)
+
         self._tick_enemy_statuses(dt)
         self._group_alert()
 
@@ -1058,6 +1262,7 @@ class LocalScene(Scene):
         self.notifications = [
             (txt, t - dt) for txt, t in self.notifications if t - dt > 0
         ]
+        self._last_hp = state.hp
 
     def _tick_enemy_statuses(self, dt):
         for unit in list(self.enemies) + list(self.animals):
@@ -1121,6 +1326,7 @@ class LocalScene(Scene):
 
     def _on_player_death(self):
         state = self.manager.player_state
+        self.casting = None
         lost = state.gold // 5
         state.gold -= lost
         # Потеря одного случайного предмета из инвентаря.
@@ -1367,6 +1573,18 @@ class LocalScene(Scene):
             screen.blit(surf, (10, y))
             y += 18
 
+        if self.casting is not None:
+            ratio = min(1.0, self.cast_elapsed / max(0.001, self.cast_total))
+            pg.draw.rect(screen, (35, 35, 45), (10, y, 200, 12))
+            pg.draw.rect(
+                screen, (110, 170, 255), (10, y, int(200 * ratio), 12)
+            )
+            surf = self._font_hud.render(
+                f"Каст: {self.casting.name}", True, (200, 225, 255)
+            )
+            screen.blit(surf, (216, y - 2))
+            y += 18
+
         # === Навигация ===
         y += 20
         state = self.manager.player_state
@@ -1581,7 +1799,21 @@ class LocalScene(Scene):
         node = self._find_resource_near()
         chest = self._find_chest_near()
         if npc:
-            text = f"E — поговорить с {npc.name} | Q F R — умения | I C K J | Esc"
+            if (
+                self.segment.location_type.is_settlement
+                and self.segment.village_state == "hostile"
+            ):
+                text = "Деревня враждебна: стража атакует | ЛКМ — атака | Esc"
+            else:
+                steal_hint = (
+                    " | G — украсть"
+                    if self.manager.player_state.class_id == "rogue"
+                    else ""
+                )
+                text = (
+                    f"E — поговорить с {npc.name} ({faction_name(npc.faction)})"
+                    f"{steal_hint} | Q F R — умения | I C K J | Esc"
+                )
         elif node is not None:
             text = f"E — собрать: {node.display_name} | ЛКМ — атака | I C K J | Esc"
         elif chest is not None:
@@ -1595,6 +1827,11 @@ class LocalScene(Scene):
             text = f"E — {label} | ЛКМ — атака | I C K J | Esc"
         elif self._find_prop_near({"note"}) is not None:
             text = "E — прочитать записку | ЛКМ — атака | I C K J | Esc"
+        elif (
+            self.segment.location_type.is_settlement
+            and self.segment.village_state == "destroyed"
+        ):
+            text = "Деревня разрушена | ЛКМ — атака | I C K J | Esc"
         elif self.segment.location_type.is_settlement:
             text = "T — отдохнуть | E — диалог | Q F R — умения | I C K J | Esc"
         elif self.segment.location_type.is_quest and not self.segment.cleared:

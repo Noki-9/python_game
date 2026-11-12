@@ -4,6 +4,7 @@ import random
 from core.config import TILE_SIZE
 from models.npc import NPC
 from world.dialogue import ROLE_TITLES
+from world.factions import faction_for_seed
 from world.item_generator import roll_random_equipment
 
 MALE_NAMES = [
@@ -77,12 +78,13 @@ def _find_npc_pos(rng, local_map, cx_px, cy_px, existing):
 def spawn_npcs(local_map, seed, is_starting=False):
     rng = random.Random(seed + 23)
     npcs = []
+    faction = faction_for_seed(seed)
 
-    roles = ["merchant", "healer", "elder", "questgiver", "guard"]
-    if rng.random() < 0.5:
+    roles = ["merchant", "blacksmith", "healer", "elder", "questgiver", "guard"]
+    if rng.random() < 0.4:
         roles.append("guard")
-    if not is_starting and rng.random() < 0.5:
-        roles.append("blacksmith")
+    if rng.random() < 0.25:
+        roles.append("healer")
 
     spawn_tx, spawn_ty = local_map.spawn_tile
     cx_px = spawn_tx * TILE_SIZE
@@ -107,6 +109,7 @@ def spawn_npcs(local_map, seed, is_starting=False):
             color=color,
         )
         npc.role_title = ROLE_TITLES.get(role, "")
+        npc.faction = faction
 
         if role in ("merchant", "blacksmith"):
             npc.inventory = _generate_shop_inventory(rng)

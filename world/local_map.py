@@ -342,11 +342,11 @@ def _extract_vegetation(tiles, w, h, ground):
 
 
 RESOURCE_COUNTS = {
-    Biome.FOREST: {"herb": 6, "log": 5, "ore": 1},
-    Biome.PLAINS: {"herb": 5, "log": 3, "ore": 1},
-    Biome.DESERT: {"herb": 1, "ore": 3, "log": 1},
-    Biome.TUNDRA: {"herb": 2, "ore": 3, "log": 2},
-    Biome.MOUNTAIN: {"herb": 1, "ore": 7, "log": 1},
+    Biome.FOREST: {"herb": 6, "log": 5, "ore": 1, "stone": 1},
+    Biome.PLAINS: {"herb": 5, "log": 3, "ore": 1, "stone": 2},
+    Biome.DESERT: {"herb": 1, "ore": 3, "log": 1, "stone": 2},
+    Biome.TUNDRA: {"herb": 2, "ore": 3, "log": 2, "stone": 3},
+    Biome.MOUNTAIN: {"herb": 1, "ore": 7, "log": 1, "stone": 6},
     Biome.OCEAN: {},
 }
 

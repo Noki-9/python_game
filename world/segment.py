@@ -19,6 +19,9 @@ class Segment:
         self.bridge = False
         self.road = False
         self.opened_props: set[tuple[str, int, int]] = set()
+        self.depleted_resources: set[tuple[int, int]] = set()
+        # Состояние деревни: peaceful | hostile | destroyed.
+        self.village_state = "peaceful"
 
     def get_local_map(self, neighbors=None, player_state=None):
         if self.local_map is None:
