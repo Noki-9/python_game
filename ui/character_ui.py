@@ -2,6 +2,7 @@ import pygame as pg
 
 from core.assets import assets
 from ui.overlay import UIOverlay
+from world.factions import FACTIONS, faction_name
 
 STAT_NAMES = {
     "strength": "Сила",
@@ -64,6 +65,10 @@ class CharacterUI(UIOverlay):
 
         x = self.width // 2 - 300
         y = 110
+        faction_line = "Репутация: {:d}  |  ".format(s.reputation) + "  ".join(
+            f"{faction_name(fid)} {s.faction_standing(fid):+d}"
+            for fid in FACTIONS
+        )
         info = [
             f"Класс: {s.class_def.name}",
             f"Уровень: {s.level}  ({s.xp}/{s.xp_to_next} XP)",
@@ -74,7 +79,7 @@ class CharacterUI(UIOverlay):
             f"Защита: {s.defense}",
             f"Радиус атаки: {s.attack_range}",
             f"Золото: {s.gold}",
-            "",
+            faction_line,
             f"Очки характеристик: {s.stat_points}",
             f"Очки навыков: {s.skill_points}",
         ]

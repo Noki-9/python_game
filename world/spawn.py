@@ -51,6 +51,17 @@ ENEMY_DEFS = {
         scale=1.3,
         hit_effect="bleed",
     ),
+    # Враждебная деревенская стража (ТЗ 8: реакция на убийство NPC).
+    "guard": dict(
+        hp=65,
+        speed=125,
+        damage=9,
+        attack_range=38,
+        attack_cooldown=0.9,
+        aggro_radius=340,
+        xp=35,
+        color=(130, 130, 180),
+    ),
 }
 
 ANIMAL_DEFS = {
@@ -232,6 +243,32 @@ def _random_free_pos(rng, local_map, avoid_pos=None, min_dist=0):
                 continue
         return px, py
     return None
+
+
+def spawn_guard_enemy(x, y, seed=0):
+    """Стражник, ставший враждебным после убийства жителя."""
+    defn = ENEMY_DEFS["guard"]
+    enemy = Enemy(
+        "guard",
+        x,
+        y,
+        TILE_SIZE - 8,
+        TILE_SIZE - 8,
+        health=defn["hp"],
+        speed=defn["speed"],
+        damage=defn["damage"],
+        attack_range=defn["attack_range"],
+        attack_cooldown=defn["attack_cooldown"],
+        aggro_radius=defn["aggro_radius"],
+        xp_reward=defn["xp"],
+        color=defn["color"],
+        loot_rng_seed=int(seed) & 0x7FFFFFFF,
+        sprite_group="npcs",
+        sprite_key="guard",
+    )
+    enemy.home_x = x
+    enemy.home_y = y
+    return enemy
 
 
 def spawn_enemies(local_map, biome, location_type, seed, level=1):

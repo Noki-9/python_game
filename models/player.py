@@ -87,16 +87,17 @@ class Player(Unit):
             self.attack_timer = max(0.0, self.attack_timer - dt)
 
         walls = walls or []
-        keys = pg.key.get_pressed()
+        # Индексация по scancode не зависит от раскладки клавиатуры.
+        keys = list(pg.key.get_pressed())
 
         dx = dy = 0
-        if keys[pg.K_w]:
+        if keys[pg.KSCAN_W] or keys[pg.KSCAN_UP]:
             dy -= 1
-        if keys[pg.K_s]:
+        if keys[pg.KSCAN_S] or keys[pg.KSCAN_DOWN]:
             dy += 1
-        if keys[pg.K_a]:
+        if keys[pg.KSCAN_A] or keys[pg.KSCAN_LEFT]:
             dx -= 1
-        if keys[pg.K_d]:
+        if keys[pg.KSCAN_D] or keys[pg.KSCAN_RIGHT]:
             dx += 1
 
         self.moving = dx != 0 or dy != 0

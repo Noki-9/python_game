@@ -20,6 +20,7 @@ class POI:
     name: str
     cleared: bool = False
     discovered: bool = False
+    destroyed: bool = False
 
     @property
     def location_type(self) -> LocationType:

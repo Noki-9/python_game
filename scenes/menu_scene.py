@@ -5,7 +5,7 @@ import pygame as pg
 from core.classes import CLASSES
 from core.config import screen
 from core.player_state import PlayerState
-from core.save_load import has_save, load_game
+from core.save_load import latest_slot, load_game
 from core.scene_manager import Scene
 from world.world_map import WorldMap
 
@@ -75,10 +75,11 @@ class MenuScene(Scene):
             self.manager.running = False
 
     def _continue(self):
-        if not has_save("auto"):
+        slot = latest_slot()
+        if slot is None:
             self._flash("Сохранение не найдено")
             return
-        loaded = load_game("auto")
+        loaded = load_game(slot)
         if loaded is None:
             self._flash("Не удалось загрузить сохранение")
             return

@@ -2,6 +2,7 @@ import pygame as pg
 
 from core.assets import assets
 from ui.overlay import UIOverlay
+from world.factions import faction_name, standing_title
 
 COL_W = 420
 ROW_H = 42
@@ -35,6 +36,9 @@ class TradeUI(UIOverlay):
     def _flash(self, text):
         self.message = text
         self.message_timer = 2.0
+
+    def _rep(self):
+        return self.state.reputation_with(self.npc.faction)
 
     # --- Раскладка ---
     def _layout(self):
@@ -89,7 +93,7 @@ class TradeUI(UIOverlay):
                 self._sell(items[row])
 
     def _buy(self, item):
-        price = _buy_price(item, self.state.reputation)
+        price = _buy_price(item, self._rep())
         if self.state.gold < price:
             self._flash("Недостаточно золота")
             return
@@ -101,7 +105,7 @@ class TradeUI(UIOverlay):
     def _sell(self, item):
         if item not in self.state.inventory:
             return
-        price = _sell_price(item, self.state.reputation)
+        price = _sell_price(item, self._rep())
         self.state.inventory.remove(item)
         self.state.gold += price
         self._flash(f"Продано: {item.name} за {price}")
@@ -111,7 +115,9 @@ class TradeUI(UIOverlay):
         super().draw(screen)
 
         title = self.font_big.render(
-            f"Торговля — {self.npc.name}", True, (255, 255, 255)
+            f"Торговля — {self.npc.name} ({faction_name(self.npc.faction)})",
+            True,
+            (255, 255, 255),
         )
         screen.blit(title, ((self.width - title.get_width()) // 2, 60))
 
@@ -125,6 +131,14 @@ class TradeUI(UIOverlay):
             screen.blit(gold, (gx + gold_icon.get_width() + 6, 100))
         else:
             screen.blit(gold, ((self.width - gold.get_width()) // 2, 100))
+
+        rep = self._rep()
+        rep_line = self.font_small.render(
+            f"{faction_name(self.npc.faction)}: {rep:+d} ({standing_title(rep)})",
+            True,
+            (190, 200, 230),
+        )
+        screen.blit(rep_line, ((self.width - rep_line.get_width()) // 2, 126))
 
         left, right = self._layout()
 
@@ -174,7 +188,7 @@ class TradeUI(UIOverlay):
                 y,
                 rect.w - 8,
                 item,
-                _buy_price(item, self.state.reputation),
+                _buy_price(item, self._rep()),
                 "buy",
             )
 
@@ -197,7 +211,7 @@ class TradeUI(UIOverlay):
                 y,
                 rect.w - 8,
                 item,
-                _sell_price(item, self.state.reputation),
+                _sell_price(item, self._rep()),
                 "sell",
             )
 

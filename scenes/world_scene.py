@@ -22,6 +22,7 @@ from world.biome import Biome
 
 SEG_SIZE = 16
 CAM_PAN_SPEED = 600
+MOVE_REPEAT_DELAY = 0.2
 
 BIOME_MOVE_COST = {
     Biome.PLAINS: 1,
@@ -42,6 +43,21 @@ POI_ICONS = {
     "wild_point": "wild",
 }
 
+# Тайлы для глобальной карты: сегмент рисуется текстурой биома.
+# Лес строится из травяной подложки и разбросанных поверх деревьев,
+# чтобы деревья не повторялись ровной сеткой.
+BIOME_TILE = {
+    Biome.OCEAN: "water",
+    Biome.TUNDRA: "snow",
+    Biome.DESERT: "sand",
+    Biome.PLAINS: "grass",
+    Biome.FOREST: "grass",
+    Biome.MOUNTAIN: "rock",
+}
+FOREST_TINT = (16, 52, 24)
+FOREST_TINT_ALPHA = 78
+FOREST_TREE_SIZES = (18, 22, 26)
+
 
 def _mix(a, b, t):
     return (
@@ -49,6 +65,13 @@ def _mix(a, b, t):
         int(a[1] * (1 - t) + b[1] * t),
         int(a[2] * (1 - t) + b[2] * t),
     )
+
+
+def _hash01(gx, gy, salt):
+    h = (gx * 73856093) ^ (gy * 19349663) ^ (salt * 2654435761)
+    h = (h ^ (h >> 16)) * 0x85EBCA6B & 0xFFFFFFFF
+    h = h ^ (h >> 13)
+    return (h & 0xFFFFFFFF) / 0xFFFFFFFF
 
 
 def _edge_noise(gx, gy, direction, i):
@@ -87,6 +110,7 @@ class WorldScene(Scene):
         self._minimap_surf = None
         self._minimap_dirty = True
         self._minimap_full = None
+        self.move_cooldown = 0.0
         self.message = ""
         self.message_timer = 0.0
 
@@ -116,16 +140,140 @@ class WorldScene(Scene):
     def _prerender_map(self):
         surf = pg.Surface((self.map_w_px, self.map_h_px))
         surf.fill((15, 15, 25))
+        tiles = self._world_tile_frames()
+        seed = self.world.seed
         for (gx, gy), seg in self.world.segments.items():
-            pg.draw.rect(
-                surf,
-                seg.biome.color,
-                (gx * SEG_SIZE, gy * SEG_SIZE, SEG_SIZE, SEG_SIZE),
+            variants, _color = tiles[seg.biome]
+            variant = ((gx * 73856093) ^ (gy * 19349663) ^ seed) & 0x7FFFFFFF
+            surf.blit(
+                variants[variant % len(variants)],
+                (gx * SEG_SIZE, gy * SEG_SIZE),
             )
 
+        self._draw_forest_trees(surf)
+        self._draw_biome_borders(surf, tiles)
         self._draw_terrain_features(surf)
+        self.world._prerender = surf
 
+    def _world_tile_frames(self):
+        """Уменьшенные тайлы биомов для глобальной карты (кэш на мире)."""
+        cache = getattr(self.world, "_tile_frames_cache", None)
+        if cache is not None:
+            return cache
+        cache = {}
+        for biome, tile_name in BIOME_TILE.items():
+            frames = [
+                assets.scaled(frame, SEG_SIZE, SEG_SIZE)
+                for frame in assets.tile_frames(tile_name)
+            ]
+            if not frames:
+                fallback = pg.Surface((SEG_SIZE, SEG_SIZE))
+                fallback.fill(biome.color)
+                frames = [fallback]
+            if biome == Biome.FOREST:
+                frames = [
+                    self._tint_frame(f, FOREST_TINT, FOREST_TINT_ALPHA)
+                    for f in frames
+                ]
+                color = self._surface_color(frames[0])
+            else:
+                color = assets.tile_color(tile_name, biome.color)
+            cache[biome] = (tuple(frames), color)
+        self.world._tile_frames_cache = cache
+        return cache
+
+    @staticmethod
+    def _tint_frame(frame, color, alpha):
+        tinted = frame.copy()
+        overlay = pg.Surface(frame.get_size(), pg.SRCALPHA)
+        overlay.fill((*color, alpha))
+        tinted.blit(overlay, (0, 0))
+        return tinted
+
+    @staticmethod
+    def _surface_color(surface):
+        w, h = surface.get_size()
+        r = g = b = 0
+        for y in range(h):
+            for x in range(w):
+                c = surface.get_at((x, y))
+                r += c.r
+                g += c.g
+                b += c.b
+        n = max(1, w * h)
+        return (r // n, g // n, b // n)
+
+    def _forest_tree_sprites(self):
+        """Вырезанные из тайла деревья с прозрачным фоном (кэш на мире)."""
+        cache = getattr(self.world, "_forest_tree_cache", None)
+        if cache is not None:
+            return cache
+        cache = []
+        tree_frames = assets.tile_frames("tree")
+        grass_frames = assets.tile_frames("grass")
+        for index, frame in enumerate(tree_frames):
+            base = grass_frames[index % len(grass_frames)] if grass_frames else None
+            if base is None or base.get_size() != frame.get_size():
+                continue
+            sprite = pg.Surface(frame.get_size(), pg.SRCALPHA)
+            for y in range(frame.get_height()):
+                for x in range(frame.get_width()):
+                    color = frame.get_at((x, y))
+                    ref = base.get_at((x, y))
+                    diff = (
+                        abs(color.r - ref.r)
+                        + abs(color.g - ref.g)
+                        + abs(color.b - ref.b)
+                    )
+                    if diff > 14:
+                        sprite.set_at((x, y), (color.r, color.g, color.b, 255))
+            if sprite.get_bounding_rect().width == 0:
+                continue
+            variants = tuple(
+                assets.scaled(sprite, size) for size in FOREST_TREE_SIZES
+            )
+            cache.append((sprite, variants))
+        self.world._forest_tree_cache = cache
+        return cache
+
+    def _draw_forest_trees(self, surface):
+        trees = self._forest_tree_sprites()
+        if not trees:
+            return
+        cells = [
+            (gx, gy)
+            for (gx, gy), seg in self.world.segments.items()
+            if seg.biome == Biome.FOREST
+        ]
+        # Сначала северные клетки, затем южные — кроны перекрываются естественно.
+        cells.sort(key=lambda cell: (cell[1], cell[0]))
+        for gx, gy in cells:
+            roll = _hash01(gx, gy, 7)
+            if roll < 0.10:
+                continue
+            if roll < 0.62:
+                count = 1
+            elif roll < 0.88:
+                count = 2
+            else:
+                count = 3
+            cx = gx * SEG_SIZE + SEG_SIZE // 2
+            cy = gy * SEG_SIZE + SEG_SIZE // 2
+            for i in range(count):
+                salt = 11 + i * 17
+                spr_index = int(_hash01(gx, gy, salt) * len(trees)) % len(trees)
+                _sprite, variants = trees[spr_index]
+                variant = int(_hash01(gx, gy, salt + 5) * len(variants)) % len(variants)
+                tree = variants[variant]
+                tw, th = tree.get_size()
+                ox = int((_hash01(gx, gy, salt + 9) - 0.5) * 12)
+                oy = int((_hash01(gx, gy, salt + 13) - 0.5) * 12)
+                surface.blit(tree, (cx + ox - tw // 2, cy + oy - th // 2))
+
+    def _draw_biome_borders(self, surface, tiles):
+        """Переходы между биомами, включая непроходимые океан и горы."""
         for (gx, gy), seg in self.world.segments.items():
+            _frames, seg_color = tiles[seg.biome]
             for direction, (dx, dy) in (
                 ("N", (0, -1)),
                 ("S", (0, 1)),
@@ -135,71 +283,237 @@ class WorldScene(Scene):
                 nbr = self.world.segments.get((gx + dx, gy + dy))
                 if nbr is None or nbr.biome == seg.biome:
                     continue
+                _nbr_frames, nbr_color = tiles[nbr.biome]
                 seg_walk = seg.biome.walkable
                 nbr_walk = nbr.biome.walkable
                 if seg_walk and not nbr_walk:
+                    # Плавный берег/предгорье на проходимой стороне.
                     self._draw_edge_dither(
-                        surf,
+                        surface,
                         gx,
                         gy,
                         direction,
-                        seg.biome.color,
-                        nbr.biome.color,
+                        seg_color,
+                        nbr_color,
                         max_thickness=6,
                     )
                 elif not seg_walk and nbr_walk:
-                    continue
+                    # Мягкая кромка на непроходимой стороне.
+                    fringe = _mix(seg_color, nbr_color, 0.35)
+                    self._draw_edge_dither(
+                        surface,
+                        gx,
+                        gy,
+                        direction,
+                        seg_color,
+                        fringe,
+                        max_thickness=3,
+                    )
                 else:
                     self._draw_edge_dither(
-                        surf, gx, gy, direction, seg.biome.color, nbr.biome.color
+                        surface,
+                        gx,
+                        gy,
+                        direction,
+                        seg_color,
+                        nbr_color,
+                        max_thickness=5,
                     )
-        self.world._prerender = surf
 
     def _draw_terrain_features(self, surface):
         """Реки, озёра, броды/мосты и дороги поверх биомов."""
-        for gx, gy in self.world.lakes:
-            pg.draw.rect(
+        self._draw_lakes(surface)
+        self._draw_rivers(surface)
+        self._draw_roads(surface)
+        self._draw_crossings(surface)
+
+    def _draw_roads(self, surface):
+        roads = self.world.roads
+        if not roads:
+            return
+        half = SEG_SIZE // 2
+        color = (178, 156, 112)
+        edge = (128, 108, 76)
+        edges = set()
+        for gx, gy in roads:
+            a = (gx * SEG_SIZE + half, gy * SEG_SIZE + half)
+            for dx, dy in ((1, 0), (0, 1)):
+                nb = (gx + dx, gy + dy)
+                if nb not in roads:
+                    continue
+                b = (nb[0] * SEG_SIZE + half, nb[1] * SEG_SIZE + half)
+                edges.add((a, b))
+        for a, b in edges:
+            pg.draw.line(surface, edge, a, b, 5)
+        for a, b in edges:
+            pg.draw.line(surface, color, a, b, 3)
+        for gx, gy in roads:
+            pg.draw.circle(
                 surface,
-                (42, 96, 176),
-                (gx * SEG_SIZE, gy * SEG_SIZE, SEG_SIZE, SEG_SIZE),
+                color,
+                (gx * SEG_SIZE + half, gy * SEG_SIZE + half),
+                2,
             )
-        for gx, gy in self.world.rivers:
-            pg.draw.rect(
-                surface,
-                (58, 128, 205),
-                (gx * SEG_SIZE + 2, gy * SEG_SIZE, SEG_SIZE - 4, SEG_SIZE),
-            )
-            pg.draw.rect(
-                surface,
-                (96, 170, 230),
-                (gx * SEG_SIZE + 5, gy * SEG_SIZE, 2, SEG_SIZE),
-            )
-        for gx, gy in self.world.roads:
-            sx, sy = gx * SEG_SIZE, gy * SEG_SIZE
-            sx += SEG_SIZE // 2
-            sy += SEG_SIZE // 2
-            pg.draw.rect(surface, (178, 156, 112), (sx - 2, sy - 2, 4, 4))
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                if (gx + dx, gy + dy) in self.world.roads:
-                    pg.draw.rect(
-                        surface,
-                        (178, 156, 112),
-                        (
-                            sx - 2 + dx * 4,
-                            sy - 2 + dy * 4,
-                            max(2, 8 if dx else 4),
-                            max(2, 8 if dy else 4),
-                        ),
-                    )
+
+    def _crossing_is_vertical(self, gx, gy):
+        """Мост поперёк реки: вертикальный, если река течёт горизонтально."""
+        rivers = self.world.rivers
+        horizontal = (gx - 1, gy) in rivers or (gx + 1, gy) in rivers
+        vertical = (gx, gy - 1) in rivers or (gx, gy + 1) in rivers
+        if horizontal and not vertical:
+            return True
+        return False
+
+    def _draw_crossings(self, surface):
         for gx, gy in self.world.crossings:
             seg = self.world.get(gx, gy)
             if seg is None:
                 continue
             sx, sy = gx * SEG_SIZE, gy * SEG_SIZE
+            half = SEG_SIZE // 2
             color = (150, 110, 62) if seg.bridge else (206, 196, 150)
+            if self._crossing_is_vertical(gx, gy):
+                rect = pg.Rect(sx + half - 2, sy + 1, 4, SEG_SIZE - 2)
+            else:
+                rect = pg.Rect(sx + 1, sy + half - 2, SEG_SIZE - 2, 4)
             pg.draw.rect(
-                surface, color, (sx + 2, sy + SEG_SIZE // 2 - 3, SEG_SIZE - 4, 6)
+                surface,
+                (84, 70, 46) if seg.bridge else (150, 140, 104),
+                rect.inflate(2, 2),
             )
+            pg.draw.rect(surface, color, rect)
+
+    def _draw_lakes(self, surface):
+        """Озёра рисуются слитными округлыми водоёмами, а не квадратами."""
+        lakes = self.world.lakes
+        if not lakes:
+            return
+        half = SEG_SIZE // 2
+        shore = (36, 82, 142)
+        water = (54, 116, 194)
+        wave = (104, 168, 226)
+
+        # Береговая кромка.
+        for gx, gy in lakes:
+            pg.draw.circle(
+                surface, shore, (gx * SEG_SIZE + half, gy * SEG_SIZE + half), 10
+            )
+        for gx, gy in lakes:
+            cx, cy = gx * SEG_SIZE + half, gy * SEG_SIZE + half
+            for dx, dy in (
+                (1, 0), (-1, 0), (0, 1), (0, -1),
+                (1, 1), (1, -1), (-1, 1), (-1, -1),
+            ):
+                if (gx + dx, gy + dy) in lakes:
+                    pg.draw.line(
+                        surface,
+                        shore,
+                        (cx, cy),
+                        ((gx + dx) * SEG_SIZE + half, (gy + dy) * SEG_SIZE + half),
+                        12,
+                    )
+
+        # Вода.
+        for gx, gy in lakes:
+            pg.draw.circle(
+                surface, water, (gx * SEG_SIZE + half, gy * SEG_SIZE + half), 8
+            )
+        for gx, gy in lakes:
+            cx, cy = gx * SEG_SIZE + half, gy * SEG_SIZE + half
+            for dx, dy in (
+                (1, 0), (-1, 0), (0, 1), (0, -1),
+                (1, 1), (1, -1), (-1, 1), (-1, -1),
+            ):
+                if (gx + dx, gy + dy) in lakes:
+                    pg.draw.line(
+                        surface,
+                        water,
+                        (cx, cy),
+                        ((gx + dx) * SEG_SIZE + half, (gy + dy) * SEG_SIZE + half),
+                        10,
+                    )
+
+        # Редкие блики.
+        for gx, gy in lakes:
+            h = ((gx * 73856093) ^ (gy * 19349663)) & 0x7FFFFFFF
+            if h % 3:
+                continue
+            cx = gx * SEG_SIZE + half - 5 + h % 4
+            cy = gy * SEG_SIZE + half - 2 + (h >> 7) % 5
+            pg.draw.line(surface, wave, (cx, cy), (cx + 5, cy), 1)
+
+    def _draw_rivers(self, surface):
+        """Реки рисуются связными руслами по центрам соседних клеток."""
+        rivers = self.world.rivers
+        if not rivers:
+            return
+        half = SEG_SIZE // 2
+        outline = (34, 78, 148)
+        water = (62, 132, 208)
+        highlight = (116, 186, 238)
+
+        edges = set()
+        for gx, gy in rivers:
+            for dx, dy in (
+                (1, 0), (0, 1), (1, 1), (1, -1),
+            ):
+                nb = (gx + dx, gy + dy)
+                if nb not in rivers:
+                    continue
+                if dx and dy:
+                    # Внутри блока 2x2 диагональ не нужна — она даёт «крестик».
+                    if dy == 1:
+                        if (gx + 1, gy) in rivers and (gx, gy + 1) in rivers:
+                            continue
+                    else:
+                        if (gx + 1, gy) in rivers and (gx, gy - 1) in rivers:
+                            continue
+                a = (gx * SEG_SIZE + half, gy * SEG_SIZE + half)
+                b = (nb[0] * SEG_SIZE + half, nb[1] * SEG_SIZE + half)
+                if a > b:
+                    a, b = b, a
+                edges.add((a, b))
+
+        # Заполняем центры блоков 2x2, иначе русло рисуется полым квадратом.
+        blocks = set()
+        for gx, gy in rivers:
+            if (
+                (gx + 1, gy) in rivers
+                and (gx, gy + 1) in rivers
+                and (gx + 1, gy + 1) in rivers
+            ):
+                blocks.add((gx, gy))
+
+        # Тёмная кромка и русло с округлыми стыками.
+        for a, b in edges:
+            pg.draw.line(surface, outline, a, b, 6)
+        for gx, gy in rivers:
+            pg.draw.circle(
+                surface, outline, (gx * SEG_SIZE + half, gy * SEG_SIZE + half), 3
+            )
+        for gx, gy in blocks:
+            rect = pg.Rect(
+                gx * SEG_SIZE + half, gy * SEG_SIZE + half, SEG_SIZE, SEG_SIZE
+            )
+            pg.draw.rect(surface, outline, rect.inflate(6, 6))
+        for a, b in edges:
+            pg.draw.line(surface, water, a, b, 3)
+        for gx, gy in rivers:
+            pg.draw.circle(
+                surface, water, (gx * SEG_SIZE + half, gy * SEG_SIZE + half), 2
+            )
+        for gx, gy in blocks:
+            rect = pg.Rect(
+                gx * SEG_SIZE + half, gy * SEG_SIZE + half, SEG_SIZE, SEG_SIZE
+            )
+            pg.draw.rect(surface, water, rect)
+
+        # Прерывистый блик по течению.
+        for a, b in edges:
+            h = (a[0] * 73856093) ^ (a[1] * 19349663) ^ (b[0] * 83492791)
+            if h % 3:
+                continue
+            pg.draw.line(surface, highlight, a, b, 1)
 
     def _draw_edge_dither(
         self, surface, gx, gy, direction, base, nbr_color, max_thickness=5
@@ -273,9 +587,8 @@ class WorldScene(Scene):
         elif self.mode == "spawn":
             self.gx = self.world.start_gx
             self.gy = self.world.start_gy
-        else:
-            self.gx = self.world.start_gx
-            self.gy = self.world.start_gy
+        # В play-режиме позиция уже задана в __init__ или приходит из world_pos.
+        self.move_cooldown = 0.0
         self._center_camera()
         if self.mode == "play":
             self._reveal_around_player()
@@ -338,16 +651,17 @@ class WorldScene(Scene):
             self._open_fast_travel()
             return
         dx = dy = 0
-        if event.key == pg.K_w:
+        if event.key in (pg.K_w, pg.K_UP):
             dy = -1
-        if event.key == pg.K_s:
+        if event.key in (pg.K_s, pg.K_DOWN):
             dy = 1
-        if event.key == pg.K_a:
+        if event.key in (pg.K_a, pg.K_LEFT):
             dx = -1
-        if event.key == pg.K_d:
+        if event.key in (pg.K_d, pg.K_RIGHT):
             dx = 1
         if dx or dy:
             self._try_step(dx, dy)
+            self.move_cooldown = MOVE_REPEAT_DELAY
         if event.key == pg.K_RETURN:
             seg = self.world.get(self.gx, self.gy)
             if seg and self.world.is_passable(self.gx, self.gy):
@@ -361,6 +675,9 @@ class WorldScene(Scene):
         seg = self.world.get(self.gx, self.gy)
         if seg is None or not seg.location_type.is_settlement:
             self._flash("Отдых возможен только в деревне")
+            return
+        if seg.village_state == "destroyed":
+            self._flash("В разрушенной деревне негде отдохнуть")
             return
         self.state.rest(full=True)
         self.state.remember_village(self.gx, self.gy)
@@ -377,6 +694,10 @@ class WorldScene(Scene):
     def fast_travel_to(self, gx, gy):
         if (gx, gy) not in self.state.visited_villages:
             self._flash("Эта деревня ещё не открыта")
+            return
+        poi = self.world.poi_at(gx, gy)
+        if poi is not None and poi.destroyed:
+            self._flash("Деревня разрушена — путь туда закрыт")
             return
         if (gx, gy) == (self.gx, self.gy):
             self._flash("Вы уже здесь")
@@ -415,14 +736,39 @@ class WorldScene(Scene):
 
     def _try_step(self, dx, dy):
         if not self._can_move(dx, dy):
-            return
+            return False
         cost = self._move_cost(dx, dy)
         if not self.state.spend(cost):
-            return
+            return False
         self.gx += dx
         self.gy += dy
         self._reveal_around_player()
         self._center_camera()
+        return True
+
+    def _held_direction(self):
+        keys = list(pg.key.get_pressed())
+        dx = dy = 0
+        if keys[pg.KSCAN_W] or keys[pg.KSCAN_UP]:
+            dy -= 1
+        if keys[pg.KSCAN_S] or keys[pg.KSCAN_DOWN]:
+            dy += 1
+        if keys[pg.KSCAN_A] or keys[pg.KSCAN_LEFT]:
+            dx -= 1
+        if keys[pg.KSCAN_D] or keys[pg.KSCAN_RIGHT]:
+            dx += 1
+        return dx, dy
+
+    def _update_held_move(self, dt):
+        """Повторяет шаг, пока клавиша движения удерживается."""
+        if self.move_cooldown > 0:
+            self.move_cooldown = max(0.0, self.move_cooldown - dt)
+        if self.move_cooldown > 0:
+            return
+        dx, dy = self._held_direction()
+        if dx or dy:
+            self._try_step(dx, dy)
+            self.move_cooldown = MOVE_REPEAT_DELAY
 
     def _try_pick_segment(self, screen_pos):
         gx, gy = self._screen_to_segment(screen_pos)
@@ -463,18 +809,21 @@ class WorldScene(Scene):
         if self.message_timer > 0:
             self.message_timer -= dt
         if self.mode == "play":
+            self._update_held_move(dt)
             self._reveal_around_player()
+            # Камера жёстко привязана к персонажу каждый кадр.
+            self._center_camera()
             return
 
-        keys = pg.key.get_pressed()
+        keys = list(pg.key.get_pressed())
         pan_x = pan_y = 0
-        if keys[pg.K_w]:
+        if keys[pg.KSCAN_W] or keys[pg.KSCAN_UP]:
             pan_y -= 1
-        if keys[pg.K_s]:
+        if keys[pg.KSCAN_S] or keys[pg.KSCAN_DOWN]:
             pan_y += 1
-        if keys[pg.K_a]:
+        if keys[pg.KSCAN_A] or keys[pg.KSCAN_LEFT]:
             pan_x -= 1
-        if keys[pg.K_d]:
+        if keys[pg.KSCAN_D] or keys[pg.KSCAN_RIGHT]:
             pan_x += 1
 
         if pan_x or pan_y:
@@ -541,19 +890,42 @@ class WorldScene(Scene):
             ):
                 continue
             center = (sx + SEG_SIZE // 2, sy + SEG_SIZE // 2)
-            color = (120, 120, 120) if poi.cleared else poi.icon_color
+            if poi.destroyed:
+                color = (150, 70, 70)
+            else:
+                color = (120, 120, 120) if poi.cleared else poi.icon_color
             pulse = 1.0 + 0.18 * math.sin(t * 2.6 + poi.gx * 0.7)
             pg.draw.circle(screen, color, center, int(10 * pulse), 1)
             icon = assets.world_icon(POI_ICONS.get(poi.poi_type.value, "wild"))
             if icon is not None:
                 size = 20 if poi.poi_type.value != "wild_point" else 15
                 icon = assets.scaled(icon, size, size)
+                if poi.destroyed:
+                    icon = icon.copy()
+                    icon.fill(
+                        (150, 80, 80, 255), special_flags=pg.BLEND_RGBA_MULT
+                    )
                 screen.blit(icon, icon.get_rect(center=center))
-                if poi.cleared:
+                if poi.cleared and not poi.destroyed:
                     check = assets.world_icon("cleared")
                     if check is not None:
                         check = assets.scaled(check, 9, 9)
                         screen.blit(check, (center[0] + 5, center[1] + 5))
+                if poi.destroyed:
+                    pg.draw.line(
+                        screen,
+                        (240, 80, 80),
+                        (center[0] - 6, center[1] - 6),
+                        (center[0] + 6, center[1] + 6),
+                        2,
+                    )
+                    pg.draw.line(
+                        screen,
+                        (240, 80, 80),
+                        (center[0] + 6, center[1] - 6),
+                        (center[0] - 6, center[1] + 6),
+                        2,
+                    )
             else:
                 pg.draw.circle(screen, color, center, 6)
                 pg.draw.circle(screen, (20, 20, 20), center, 6, 1)
@@ -807,12 +1179,16 @@ class WorldScene(Scene):
                 size = 13 if poi.poi_type.value != "wild_point" else 10
                 icon = assets.scaled(icon, size, size)
                 pg.draw.circle(screen, (20, 20, 20), (px, py), size // 2 + 1)
-                if poi.cleared:
+                if poi.cleared or poi.destroyed:
                     icon = icon.copy()
-                    icon.fill((120, 120, 120, 255), special_flags=pg.BLEND_RGBA_MULT)
+                    tint = (150, 80, 80, 255) if poi.destroyed else (120, 120, 120, 255)
+                    icon.fill(tint, special_flags=pg.BLEND_RGBA_MULT)
                 screen.blit(icon, icon.get_rect(center=(px, py)))
             else:
-                color = (100, 100, 100) if poi.cleared else poi.icon_color
+                if poi.destroyed:
+                    color = (150, 70, 70)
+                else:
+                    color = (100, 100, 100) if poi.cleared else poi.icon_color
                 pg.draw.circle(screen, color, (px, py), 3)
                 pg.draw.circle(screen, (20, 20, 20), (px, py), 3, 1)
 

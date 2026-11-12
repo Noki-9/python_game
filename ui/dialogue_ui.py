@@ -3,6 +3,7 @@ import pygame as pg
 from core.assets import assets
 from ui.overlay import UIOverlay
 from world.dialogue import DIALOGUES
+from world.factions import faction_name
 from world.quest_gen import generate_quest
 
 
@@ -84,6 +85,10 @@ class DialogueUI(UIOverlay):
             self._flash("Квесты недоступны")
             return
 
+        if self.state.reputation_with(self.npc.faction) <= -40:
+            self._flash("Я не доверяю тебе. Сначала исправь свою репутацию.")
+            return
+
         if self.state.quest_log.has_active_from(self.npc.npc_id):
             self._flash("Сначала выполни текущее задание")
             return
@@ -100,6 +105,8 @@ class DialogueUI(UIOverlay):
         if not self.state.quest_log.add(quest):
             self._flash("У меня больше нет заданий")
             return
+        quest.giver_gx = self.state.gx
+        quest.giver_gy = self.state.gy
 
         if quest.target_gx is not None:
             dx = quest.target_gx - self.state.gx
@@ -123,7 +130,9 @@ class DialogueUI(UIOverlay):
         super().draw(screen)
 
         title = self.font_big.render(
-            f"{self.npc.name} — {self.npc.role_title}", True,
+            f"{self.npc.name} — {self.npc.role_title} "
+            f"({faction_name(self.npc.faction)})",
+            True,
             self.npc.texture,
         )
         screen.blit(title, ((self.width - title.get_width()) // 2, 60))

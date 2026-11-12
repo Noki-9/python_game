@@ -26,12 +26,26 @@ class NPC(Unit):
         self.npc_id = npc_id
         self.name = name
         self.role = role
+        self.faction = "free"
+        self.max_health = self.health
         self.dialogue_root = role
         self.inventory = []  # для торговцев
         self.home_x = x
         self.home_y = y
         self.role_title = ""
         self._phase = (hash(npc_id) % 100) / 100.0
+
+    def is_alive(self) -> bool:
+        return self.health > 0
+
+    def take_damage(self, amount, **kwargs) -> bool:
+        """NPC можно атаковать: убийство жителя делает деревню враждебной."""
+        self.health = max(0, self.health - amount)
+        self.trigger_hurt()
+        return self.health <= 0
+
+    def drop_loot(self, rng):
+        return {}
 
     def update(self, dt, player=None):
         if player is not None:
@@ -57,6 +71,16 @@ class NPC(Unit):
             label,
             (sx + self.rect_x // 2 - label.get_width() // 2, top - 15),
         )
+
+        if self.health < self.max_health:
+            ratio = max(0.0, self.health / self.max_health)
+            bar_y = top - 5
+            pg.draw.rect(screen, (60, 60, 60), (sx, bar_y, self.rect_x, 4))
+            pg.draw.rect(
+                screen,
+                (220, 60, 60),
+                (sx, bar_y, int(self.rect_x * ratio), 4),
+            )
 
         if self.role == "questgiver":
             t = pg.time.get_ticks() / 1000.0 + self._phase * 6.28

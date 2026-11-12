@@ -22,6 +22,8 @@ class AbilityDef:
     effect_chance: float = 1.0
     effect_duration: float = 0.0
     effect_power: float = 0.0
+    # Время чтения заклинания (0 — мгновенно).
+    cast_time: float = 0.0
 
     @property
     def is_projectile(self):
@@ -142,10 +144,11 @@ MAGE_ABILITIES = [
         effect_chance=0.7,
         effect_duration=4.0,
         effect_power=3.0,
+        cast_time=0.35,
     ),
     AbilityDef(
         ability_id="m_f",
-        name="Ледяная новая",
+        name="Ледяная волна",
         description="Урон всем вокруг",
         key="F",
         mana_cost=25,
@@ -157,6 +160,7 @@ MAGE_ABILITIES = [
         effect_chance=0.8,
         effect_duration=2.5,
         effect_power=1.0,
+        cast_time=0.6,
     ),
     AbilityDef(
         ability_id="m_r",
@@ -173,6 +177,7 @@ MAGE_ABILITIES = [
         effect_chance=1.0,
         effect_duration=5.0,
         effect_power=4.0,
+        cast_time=1.0,
     ),
 ]
 

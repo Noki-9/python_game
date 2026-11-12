@@ -25,6 +25,8 @@ class Enemy(Unit):
         color,
         loot_rng_seed=0,
         visual_scale=1.0,
+        sprite_group="enemies",
+        sprite_key=None,
     ):
         super().__init__(
             "enemy",
@@ -35,8 +37,8 @@ class Enemy(Unit):
             health,
             speed,
             color,
-            sprite_group="enemies",
-            sprite_key=enemy_id,
+            sprite_group=sprite_group,
+            sprite_key=sprite_key or enemy_id,
             visual_scale=visual_scale,
         )
         self.enemy_id = enemy_id

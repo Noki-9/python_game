@@ -100,6 +100,8 @@ def _quest_to_dict(quest: Quest) -> dict:
         "consume_items": quest.consume_items,
         "target_gx": quest.target_gx,
         "target_gy": quest.target_gy,
+        "giver_gx": quest.giver_gx,
+        "giver_gy": quest.giver_gy,
     }
 
 
@@ -124,6 +126,8 @@ def _quest_from_dict(data: dict) -> Quest:
         consume_items=data.get("consume_items", False),
         target_gx=data.get("target_gx"),
         target_gy=data.get("target_gy"),
+        giver_gx=data.get("giver_gx"),
+        giver_gy=data.get("giver_gy"),
     )
 
 
@@ -140,6 +144,7 @@ def _state_to_dict(state: PlayerState) -> dict:
         "xp_to_next": state.xp_to_next,
         "gold": state.gold,
         "reputation": state.reputation,
+        "factions": dict(state.factions),
         "hp": state.hp,
         "mana": state.mana,
         "stamina": state.stamina,
@@ -174,6 +179,7 @@ def _state_from_dict(data: dict) -> PlayerState:
     state.xp_to_next = data.get("xp_to_next", 100)
     state.gold = data.get("gold", 0)
     state.reputation = data.get("reputation", 0)
+    state.factions.update(data.get("factions", {}))
     state.max_stamina = data.get("max_stamina", state.max_stamina)
     state.stamina = data.get("stamina", state.max_stamina)
     state.base_strength = data.get("base_strength", state.base_strength)
@@ -217,6 +223,10 @@ def _world_to_dict(world) -> dict:
     explored = []
     cleared = []
     poi_cleared = []
+    poi_destroyed = []
+    village_states = []
+    opened_props = []
+    depleted_resources = []
     for (gx, gy), seg in world.segments.items():
         if seg.explored:
             explored.append([gx, gy])
@@ -224,6 +234,18 @@ def _world_to_dict(world) -> dict:
             cleared.append([gx, gy])
         if seg.poi is not None and seg.poi.cleared:
             poi_cleared.append([gx, gy])
+        if seg.poi is not None and seg.poi.destroyed:
+            poi_destroyed.append([gx, gy])
+        if getattr(seg, "village_state", "peaceful") != "peaceful":
+            village_states.append([gx, gy, seg.village_state])
+        if seg.opened_props:
+            opened_props.append(
+                [gx, gy, [[kind, tx, ty] for kind, tx, ty in seg.opened_props]]
+            )
+        if getattr(seg, "depleted_resources", None):
+            depleted_resources.append(
+                [gx, gy, [[tx, ty] for tx, ty in seg.depleted_resources]]
+            )
     return {
         "seed": world.seed,
         "width": world.width,
@@ -233,6 +255,10 @@ def _world_to_dict(world) -> dict:
         "explored": explored,
         "cleared": cleared,
         "poi_cleared": poi_cleared,
+        "poi_destroyed": poi_destroyed,
+        "village_states": village_states,
+        "opened_props": opened_props,
+        "depleted_resources": depleted_resources,
     }
 
 
@@ -258,6 +284,24 @@ def _restore_world(data: dict):
         seg = world.get(gx, gy)
         if seg and seg.poi:
             seg.poi.cleared = True
+    for gx, gy in data.get("poi_destroyed", []):
+        seg = world.get(gx, gy)
+        if seg:
+            seg.village_state = "destroyed"
+            if seg.poi:
+                seg.poi.destroyed = True
+    for gx, gy, village_state in data.get("village_states", []):
+        seg = world.get(gx, gy)
+        if seg:
+            seg.village_state = village_state
+    for gx, gy, props in data.get("opened_props", []):
+        seg = world.get(gx, gy)
+        if seg:
+            seg.opened_props = {(kind, tx, ty) for kind, tx, ty in props}
+    for gx, gy, cells in data.get("depleted_resources", []):
+        seg = world.get(gx, gy)
+        if seg:
+            seg.depleted_resources = {(tx, ty) for tx, ty in cells}
     return world
 
 
@@ -279,7 +323,7 @@ def save_game(world, state, slot="auto", path=DEFAULT_DB):
             (
                 slot,
                 json.dumps(payload, ensure_ascii=False),
-                datetime.now().isoformat(timespec="seconds"),
+                datetime.now().isoformat(timespec="microseconds"),
             ),
         )
         conn.commit()
@@ -298,6 +342,21 @@ def has_save(slot="auto", path=DEFAULT_DB):
             "SELECT 1 FROM saves WHERE slot=?", (slot,)
         ).fetchone()
         return row is not None
+    finally:
+        conn.close()
+
+
+def latest_slot(path=DEFAULT_DB):
+    """Возвращает слот с самой свежей записью (auto/manual) или None."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    conn = _ensure_db(path)
+    try:
+        row = conn.execute(
+            "SELECT slot FROM saves ORDER BY updated DESC LIMIT 1"
+        ).fetchone()
+        return row[0] if row else None
     finally:
         conn.close()
 

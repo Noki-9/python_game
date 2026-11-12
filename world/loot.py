@@ -57,6 +57,14 @@ ITEMS_REGISTRY = {
         value=2,
         icon_color=(130, 90, 60),
     ),
+    "stone": Item(
+        "stone",
+        "Камень",
+        ItemType.RESOURCE,
+        Rarity.COMMON,
+        value=3,
+        icon_color=(135, 135, 145),
+    ),
 }
 
 GOLD = "gold"
@@ -67,6 +75,7 @@ LOOT_TABLES = {
     "bandit": [(GOLD, 10, 25, 0.95), ("leather", 1, 2, 0.50), ("iron_ore", 1, 1, 0.20)],
     "skeleton": [("bone", 1, 3, 0.90), (GOLD, 3, 10, 0.60)],
     "troll": [(GOLD, 30, 60, 1.00), ("iron_ore", 2, 4, 0.80), ("bone", 2, 4, 0.70)],
+    "guard": [(GOLD, 10, 25, 0.90), ("iron_ore", 1, 1, 0.25)],
     "deer": [("meat", 1, 3, 0.90), ("leather", 1, 1, 0.50)],
     "wolf": [("leather", 1, 2, 0.80), ("meat", 1, 2, 0.60)],
     "boar": [("meat", 2, 4, 0.90), ("leather", 1, 2, 0.60)],
